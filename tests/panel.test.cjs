@@ -270,7 +270,7 @@ test("saves notification layout settings through the shared panel API", async ()
   assert.equal(panel._settingsOpen, false);
 });
 
-test("uses the native Home Assistant selector for device columns", () => {
+test("uses the native Home Assistant form for desktop device columns", () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._notifications = {
@@ -281,9 +281,93 @@ test("uses the native Home Assistant selector for device columns", () => {
 
   const markup = panel._settingsMarkup();
 
-  assert.match(markup, /<ha-selector class="column-selector"><\/ha-selector>/);
-  assert.doesNotMatch(markup, /<ha-form/);
+  assert.match(markup, /<ha-form class="column-setting"><\/ha-form>/);
+  assert.doesNotMatch(markup, /<ha-selector/);
   assert.doesNotMatch(markup, /<select/);
+});
+
+test("uses tabs to configure one notification category at a time", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._settingsCategory = "equipment";
+  panel._notifications = {
+    equipment:[{equipment_id:1, name:"Plug", monitored:true, notifications:{}}],
+    smoke_alarms:[],
+    sensors:[{device_id:8, name:"Sensor"}],
+    automations:[],
+  };
+  panel._settingsDraft = {
+    columns:2,
+    item_order:{equipment:["1"], sensors:["8"]},
+  };
+
+  const equipmentMarkup = panel._settingsMarkup();
+  assert.match(equipmentMarkup, /class="settings-category-tabs" role="tablist"/);
+  assert.match(equipmentMarkup, /data-category="equipment" role="tab" aria-selected="true"/);
+  assert.match(equipmentMarkup, /data-category="sensors" role="tab" aria-selected="false"/);
+  assert.match(equipmentMarkup, />Plug<\/span>/);
+  assert.doesNotMatch(equipmentMarkup, />Sensor<\/span>/);
+
+  panel._settingsCategory = "sensors";
+  const sensorMarkup = panel._settingsMarkup();
+  assert.match(sensorMarkup, /data-category="sensors" role="tab" aria-selected="true"/);
+  assert.match(sensorMarkup, />Sensor<\/span>/);
+  assert.doesNotMatch(sensorMarkup, />Plug<\/span>/);
+});
+
+test("switches settings tabs without rerendering or closing the dialog", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._settingsOpen = true;
+  panel._settingsCategory = "smoke_alarms";
+  panel._notifications = {
+    equipment:[{equipment_id:1, name:"Plug", monitored:true, notifications:{}}],
+    smoke_alarms:[{device_id:7, name:"Smoke alarm"}],
+    sensors:[], automations:[],
+  };
+  panel._settingsDraft = {
+    columns:2,
+    item_order:{equipment:["1"], smoke_alarms:["7"]},
+  };
+  let renders = 0;
+  panel._renderSoon = () => { renders += 1; };
+  const tabs = ["equipment", "smoke_alarms"].map(category => ({
+    dataset:{category},
+    selected:null,
+    setAttribute(name, value) {
+      if (name === "aria-selected") this.selected = value;
+    },
+  }));
+  const orderSection = {innerHTML:""};
+  panel.shadowRoot.querySelector = selector => selector === "#settings-dialog"
+    ? {
+        querySelectorAll:() => tabs,
+        querySelector:() => orderSection,
+      }
+    : null;
+
+  panel._selectSettingsCategory("equipment");
+
+  assert.equal(panel._settingsOpen, true);
+  assert.equal(panel._settingsCategory, "equipment");
+  assert.equal(renders, 0);
+  assert.equal(tabs[0].selected, "true");
+  assert.equal(tabs[1].selected, "false");
+  assert.match(orderSection.innerHTML, />Plug<\/span>/);
+});
+
+test("shows panel version information in settings", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[], automations:[],
+  };
+  panel._settingsDraft = {columns:2, item_order:{}};
+
+  assert.match(
+    panel._settingsMarkup(),
+    /class="settings-version">Wiser Notifications Panel · __WISER_NOTIFICATIONS_PANEL_VERSION__<\/div>/,
+  );
 });
 
 test("tracks changed settings and keeps unchanged saves disabled", () => {

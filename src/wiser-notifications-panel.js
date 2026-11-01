@@ -104,6 +104,7 @@
       this._message = "";
       this._settingsOpen = false;
       this._settingsDraft = null;
+      this._settingsCategory = "";
       this._settingsError = "";
       this._savingSettings = false;
       this._draggedItem = null;
@@ -403,6 +404,10 @@
         columns:deviceColumns(settings.columns),
         item_order:itemOrder,
       };
+      this._settingsCategory = availableCategories(this._notifications)
+        .includes(this._category)
+        ? this._category
+        : availableCategories(this._notifications)[0] || "";
       this._settingsError = "";
       this._settingsOpen = true;
       this._renderSoon();
@@ -415,6 +420,7 @@
     _closeSettings() {
       this._settingsOpen = false;
       this._settingsDraft = null;
+      this._settingsCategory = "";
       this._settingsError = "";
       this._draggedItem = null;
       this._renderSoon();
@@ -514,9 +520,22 @@
       if (!dialog || !this._settingsOpen) return;
       const error = dialog.querySelector?.(".settings-error");
       if (error) error.textContent = this._settingsError;
-      for (const control of dialog.querySelectorAll?.(".column-selector, [data-action='settings-cancel'], [data-action='settings-save']") || []) {
+      for (const control of dialog.querySelectorAll?.(".column-setting, [data-action='settings-cancel'], [data-action='settings-save']") || []) {
         control.disabled = this._savingSettings;
       }
+    }
+
+    _selectSettingsCategory(category) {
+      const categories = availableCategories(this._notifications);
+      if (!this._settingsOpen || !categories.includes(category)) return;
+      this._settingsCategory = category;
+      const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
+      if (!dialog) return;
+      for (const tab of dialog.querySelectorAll?.(".settings-category-tab") || []) {
+        tab.setAttribute("aria-selected", String(tab.dataset.category === category));
+      }
+      const orderSection = dialog.querySelector?.(".settings-order-section");
+      if (orderSection) orderSection.innerHTML = this._settingsOrderMarkup(category);
     }
 
     _click(event) {
@@ -527,6 +546,9 @@
         this.dispatchEvent(new CustomEvent("hass-toggle-menu", {bubbles:true, composed:true}));
       } else if (action === "refresh" || action === "retry") this._load();
       else if (action === "hub") this._selectHub(target.dataset.hub);
+      else if (action === "settings-category") {
+        this._selectSettingsCategory(target.dataset.category);
+      }
       else if (action === "category") {
         const categories = availableCategories(this._notifications);
         if (categories.includes(target.dataset.category)) {
@@ -645,34 +667,48 @@
         .map(item => this._deviceCard(item, category, admin)).join("");
     }
 
+    _settingsOrderMarkup(category) {
+      if (!this._settingsDraft) return "";
+      const items = category === "equipment"
+        ? compatibleEquipment(this._notifications.equipment)
+        : this._notifications[category] || [];
+      const ordered = orderedItems(
+        category,
+        items,
+        this._settingsDraft.item_order[category],
+      );
+      const rows = ordered.map(item => `<div class="order-item" data-category="${esc(category)}" data-item-id="${esc(itemId(category, item))}">
+        <ha-icon class="order-drag-handle" icon="mdi:drag-vertical" draggable="true"></ha-icon>
+        <span>${esc(this._itemName(category, item))}</span>
+      </div>`).join("");
+      return `<section class="order-section">
+        <h3>${esc(this._t(`category.${category}`))}</h3>
+        <div class="order-list" data-category="${esc(category)}">${rows}</div>
+      </section>`;
+    }
+
     _settingsMarkup() {
       if (!this._settingsDraft) return "";
       const categories = availableCategories(this._notifications);
-      const orderSections = categories.map(category => {
-        const items = category === "equipment"
-          ? compatibleEquipment(this._notifications.equipment)
-          : this._notifications[category] || [];
-        const ordered = orderedItems(category, items, this._settingsDraft.item_order[category]);
-        const rows = ordered.map(item => `<div class="order-item" data-category="${esc(category)}" data-item-id="${esc(itemId(category, item))}">
-          <ha-icon class="order-drag-handle" icon="mdi:drag-vertical" draggable="true"></ha-icon>
-          <span>${esc(this._itemName(category, item))}</span>
-        </div>`).join("");
-        return `<section class="order-section">
-          <h3>${esc(this._t(`category.${category}`))}</h3>
-          <div class="order-list" data-category="${esc(category)}">${rows}</div>
-        </section>`;
-      }).join("");
+      const selectedCategory = categories.includes(this._settingsCategory)
+        ? this._settingsCategory
+        : categories[0];
+      const categoryTabs = categories.length ? `<nav class="settings-category-tabs" role="tablist">
+        ${categories.map(category => `<button type="button" class="settings-category-tab" data-action="settings-category" data-category="${esc(category)}" role="tab" aria-selected="${category === selectedCategory}">${esc(this._t(`category.${category}`))}</button>`).join("")}
+      </nav>` : "";
+      const orderSection = selectedCategory
+        ? this._settingsOrderMarkup(selectedCategory)
+        : "";
       return `<div class="settings-content">
           <p>${esc(this._t("panel.settings_description"))}</p>
-          <label class="column-setting">
-            <span>${esc(this._t("panel.devices_per_row"))}</span>
-            <ha-selector class="column-selector"></ha-selector>
-          </label>
+          <ha-form class="column-setting"></ha-form>
           <section class="order-settings">
             <h2>${esc(this._t("panel.device_order"))}</h2>
             <p>${esc(this._t("panel.order_hint"))}</p>
-            ${orderSections}
+            ${categoryTabs}
+            <div class="settings-order-section">${orderSection}</div>
           </section>
+          <div class="settings-version">Wiser Notifications Panel · ${esc(VERSION)}</div>
           <p class="settings-error" role="alert">${esc(this._settingsError)}</p>
         </div>
         <div class="settings-actions" id="settings-actions" slot="footer">
@@ -756,11 +792,13 @@
         .actions ha-circular-progress { --mdc-theme-primary:currentColor; }
         .settings-content { width:100%; max-width:600px; padding:4px 2px 16px; }
         .settings-content > p { margin:0 0 18px; color:var(--secondary-text-color); }
-        .column-setting { display:grid; grid-template-columns:minmax(0, 1fr) minmax(150px, 180px); align-items:center; gap:24px; margin:8px 0 18px; font-weight:500; }
-        .column-setting .column-selector { display:block; width:100%; min-width:0; }
+        .column-setting { display:block; width:100%; margin:8px 0 18px; }
         .order-settings { border-top:1px solid var(--divider-color); padding-top:18px; }
         .order-settings > h2 { margin:0 0 4px; font-size:18px; }
         .order-settings > p { margin:0 0 16px; color:var(--secondary-text-color); font-size:13px; }
+        .settings-category-tabs { display:flex; min-width:0; overflow-x:auto; margin:0 0 16px; border-bottom:1px solid var(--divider-color); }
+        .settings-category-tab { flex:0 0 auto; min-height:42px; padding:0 16px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
+        .settings-category-tab[aria-selected="true"] { color:var(--primary-color); border-bottom-color:var(--primary-color); }
         .order-section + .order-section { margin-top:18px; }
         .order-section h3 { margin:0 0 8px; font-size:15px; }
         .order-list { display:grid; gap:6px; }
@@ -771,6 +809,7 @@
         .order-item.drop-before::before, .order-item.drop-after::after { content:""; position:absolute; right:0; left:0; height:3px; border-radius:2px; background:var(--primary-color); }
         .order-item.drop-before::before { top:-5px; }
         .order-item.drop-after::after { bottom:-5px; }
+        .settings-version { margin-top:24px; color:var(--secondary-text-color); font-size:12px; text-align:right; }
         .settings-error { min-height:20px; margin:14px 0 0 !important; color:var(--error-color, #db4437) !important; }
         .settings-actions { display:flex; justify-content:flex-end; gap:8px; }
         @container (max-width:680px) {
@@ -880,15 +919,20 @@
           }
           dialog.addEventListener?.("closed", () => this._closeSettings(), {once:true});
           dialog.addEventListener?.("close-dialog", () => this._closeSettings(), {once:true});
-          const columnSelector = dialog.querySelector?.(".column-selector");
-          if (columnSelector) {
-            columnSelector.hass = this._hass;
-            columnSelector.selector = {number:{min:1, max:4, step:1, mode:"box"}};
-            columnSelector.value = this._settingsDraft.columns;
-            columnSelector.addEventListener?.("value-changed", event => {
+          const columnForm = dialog.querySelector?.(".column-setting");
+          if (columnForm) {
+            columnForm.hass = this._hass;
+            columnForm.computeLabel = schema => schema.label;
+            columnForm.schema = [{
+              name:"columns",
+              label:`${this._t("panel.devices_per_row")} — desktop`,
+              selector:{number:{min:1, max:4, step:1, mode:"box"}},
+            }];
+            columnForm.data = {columns:this._settingsDraft.columns};
+            columnForm.addEventListener?.("value-changed", event => {
               event.stopPropagation();
-              this._settingsDraft.columns = deviceColumns(event.detail?.value);
-              columnSelector.value = this._settingsDraft.columns;
+              this._settingsDraft.columns = deviceColumns(event.detail?.value?.columns);
+              columnForm.data = {columns:this._settingsDraft.columns};
             });
           }
           dialog.open = true;
