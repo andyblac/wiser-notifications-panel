@@ -93,6 +93,21 @@ test("shows monitored equipment and equipment with configured notifications", ()
   assert.deepEqual(Array.from(helpers.compatibleEquipment(equipment), item => item.equipment_id), [1, 2]);
 });
 
+test("shows tabs only for notification categories reported by the hub", () => {
+  const {helpers} = setup();
+  const notifications = {
+    equipment:[{equipment_id:1, monitored:true, notifications:{}}],
+    smoke_alarms:[],
+    sensors:[{device_id:2, enabled:true}],
+    automations:[],
+  };
+
+  assert.deepEqual(
+    Array.from(helpers.availableCategories(notifications)),
+    ["equipment", "sensors"],
+  );
+});
+
 test("localizes supported languages and falls back to English", () => {
   const {helpers} = setup();
   assert.equal(helpers.languageFor({locale:{language:"en-GB"}}), "en-GB");
@@ -125,12 +140,17 @@ test("loads native notifications from the selected hub", async () => {
   panel._hubs = ["Home"];
   panel._hass = {
     callWS:async message => {
-      assert.deepEqual(plain(message), {type:"wiser/power_notifications", hub:"Home"});
-      return [{equipment_id:1, monitored:true, notifications:{under:null, over:null}}];
+      assert.deepEqual(plain(message), {type:"wiser/notifications", hub:"Home"});
+      return {
+        equipment:[{equipment_id:1, monitored:true, notifications:{under:null, over:null}}],
+        smoke_alarms:[],
+        sensors:[],
+        automations:[],
+      };
     },
   };
   await panel._load();
-  assert.equal(panel._equipment.length, 1);
+  assert.equal(panel._notifications.equipment.length, 1);
   assert.equal(panel._drafts.get("1:under").limit, 0);
   assert.equal(panel._drafts.get("1:over").limit, 100);
 });
@@ -163,6 +183,41 @@ test("saves all three native notification settings together", async () => {
     limit:250,
     enabled:false,
   });
+});
+
+test("saves a supported device notification toggle", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._deviceDrafts.set("sensors:8", {enabled:false});
+  panel._originalDeviceDrafts.set("sensors:8", {enabled:true});
+  let request;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      request = message;
+      return {
+        equipment:[],
+        smoke_alarms:[],
+        sensors:[{device_id:8, enabled:false}],
+        automations:[],
+      };
+    },
+  };
+
+  await panel._saveDevice({
+    dataset:{category:"sensors", deviceId:"8"},
+  });
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/device_notification/set",
+    hub:"Home",
+    category:"sensor",
+    device_id:8,
+    enabled:false,
+  });
+  assert.equal(panel._deviceDrafts.get("sensors:8").enabled, false);
 });
 
 test("tracks changed settings and keeps unchanged saves disabled", () => {

@@ -1,9 +1,10 @@
-/* Native Wiser power notification management panel. */
+/* Native Wiser notification management panel. */
 (() => {
   const VERSION = "__WISER_NOTIFICATIONS_PANEL_VERSION__";
   const TRANSLATIONS = __WISER_NOTIFICATIONS_TRANSLATIONS__;
   const selectedHubs = new Map();
   const TYPES = ["under", "over"];
+  const CATEGORY_ORDER = ["equipment", "smoke_alarms", "sensors", "automations"];
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
     "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;",
@@ -47,6 +48,13 @@
     return equipment.filter(item => item.monitored || TYPES.some(type => item.notifications?.[type]));
   }
 
+  function availableCategories(notifications) {
+    return CATEGORY_ORDER.filter(category => {
+      const items = notifications?.[category] || [];
+      return category === "equipment" ? compatibleEquipment(items).length : items.length;
+    });
+  }
+
   class WiserNotificationsPanel extends HTMLElement {
     static panelApiVersion = 1;
 
@@ -56,9 +64,17 @@
       this._config = {};
       this._hubs = [];
       this._hub = "";
-      this._equipment = [];
+      this._notifications = {
+        equipment:[],
+        smoke_alarms:[],
+        sensors:[],
+        automations:[],
+      };
+      this._category = "equipment";
       this._drafts = new Map();
       this._originalDrafts = new Map();
+      this._deviceDrafts = new Map();
+      this._originalDeviceDrafts = new Map();
       this._busy = new Set();
       this._loading = true;
       this._error = "";
@@ -122,7 +138,7 @@
     _seedDrafts() {
       const next = new Map();
       const originals = new Map();
-      for (const equipment of this._equipment) {
+      for (const equipment of this._notifications.equipment) {
         for (const type of TYPES) {
           const key = this._key(equipment.equipment_id, type);
           const draft = notificationDraft(equipment.notifications?.[type], type);
@@ -132,6 +148,18 @@
       }
       this._drafts = next;
       this._originalDrafts = originals;
+      const deviceDrafts = new Map();
+      const originalDeviceDrafts = new Map();
+      for (const category of ["smoke_alarms", "sensors"]) {
+        for (const device of this._notifications[category]) {
+          const key = `${category}:${device.device_id}`;
+          const draft = {enabled:Boolean(device.enabled)};
+          deviceDrafts.set(key, draft);
+          originalDeviceDrafts.set(key, {...draft});
+        }
+      }
+      this._deviceDrafts = deviceDrafts;
+      this._originalDeviceDrafts = originalDeviceDrafts;
     }
 
     _isDirty(key) {
@@ -140,6 +168,11 @@
       if (!draft || !original) return Boolean(draft);
       return ["period_mins", "limit", "enabled"]
         .some(field => draft[field] !== original[field]);
+    }
+
+    _isDeviceDirty(key) {
+      return this._deviceDrafts.get(key)?.enabled
+        !== this._originalDeviceDrafts.get(key)?.enabled;
     }
 
     async _load(silent = false) {
@@ -155,10 +188,15 @@
         }
         if (!this._hubs.includes(this._hub)) this._hub = this._hubs[0] || "";
         if (!this._hub) throw new Error("No Wiser hub is available");
-        this._equipment = await this._hass.callWS({
-          type:"wiser/power_notifications",
+        this._notifications = await this._hass.callWS({
+          type:"wiser/notifications",
           hub:this._hub,
         });
+        for (const category of CATEGORY_ORDER) {
+          if (!Array.isArray(this._notifications?.[category])) this._notifications[category] = [];
+        }
+        const categories = availableCategories(this._notifications);
+        if (!categories.includes(this._category)) this._category = categories[0] || "equipment";
         this._seedDrafts();
         this._error = "";
       } catch (error) {
@@ -173,13 +211,25 @@
       if (!this._hubs.includes(hub) || hub === this._hub) return;
       this._hub = hub;
       if (this._config.panel_id) selectedHubs.set(this._config.panel_id, hub);
-      this._equipment = [];
+      this._notifications = {equipment:[], smoke_alarms:[], sensors:[], automations:[]};
       this._drafts.clear();
       this._load();
     }
 
     _input(event) {
       const input = event.target?.closest?.("[data-field]");
+      const deviceSection = input?.closest?.("[data-device-notification]");
+      if (input && deviceSection?.dataset?.category) {
+        const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
+        const draft = this._deviceDrafts.get(key);
+        if (!draft) return;
+        draft.enabled = input.checked;
+        const save = deviceSection.querySelector?.('[data-action="save-device"]');
+        const unchanged = !this._isDeviceDirty(key);
+        save?.toggleAttribute?.("hidden", unchanged);
+        save?.toggleAttribute?.("disabled", unchanged);
+        return;
+      }
       const section = input?.closest?.("[data-notification]");
       if (!input || !section) return;
       const key = this._key(Number(section.dataset.equipmentId), section.dataset.notification);
@@ -218,7 +268,7 @@
       this._error = "";
       this._renderSoon();
       try {
-        this._equipment = await this._hass.callWS({
+        this._notifications.equipment = await this._hass.callWS({
           type:"wiser/power_notification/set",
           hub:this._hub,
           equipment_id:equipmentId,
@@ -247,7 +297,7 @@
       this._error = "";
       this._renderSoon();
       try {
-        this._equipment = await this._hass.callWS({
+        this._notifications.equipment = await this._hass.callWS({
           type:"wiser/power_notification/delete",
           hub:this._hub,
           equipment_id:equipmentId,
@@ -263,6 +313,34 @@
       }
     }
 
+    async _saveDevice(section) {
+      if (!this._hass?.user?.is_admin) return;
+      const category = section.dataset.category;
+      const deviceId = Number(section.dataset.deviceId);
+      const key = `${category}:${deviceId}`;
+      const draft = this._deviceDrafts.get(key);
+      if (!draft || !this._isDeviceDirty(key)) return;
+      this._busy.add(key);
+      this._error = "";
+      this._renderSoon();
+      try {
+        this._notifications = await this._hass.callWS({
+          type:"wiser/device_notification/set",
+          hub:this._hub,
+          category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
+          device_id:deviceId,
+          enabled:draft.enabled,
+        });
+        this._seedDrafts();
+        this._notify(this._t("panel.saved"));
+      } catch (error) {
+        this._error = this._t("panel.save_error", {error:error?.message || error});
+      } finally {
+        this._busy.delete(key);
+        this._renderSoon();
+      }
+    }
+
     _click(event) {
       const target = event.target?.closest?.("[data-action]");
       if (!target) return;
@@ -271,7 +349,15 @@
         this.dispatchEvent(new CustomEvent("hass-toggle-menu", {bubbles:true, composed:true}));
       } else if (action === "refresh" || action === "retry") this._load();
       else if (action === "hub") this._selectHub(target.dataset.hub);
+      else if (action === "category") {
+        const categories = availableCategories(this._notifications);
+        if (categories.includes(target.dataset.category)) {
+          this._category = target.dataset.category;
+          this._renderSoon();
+        }
+      }
       else if (action === "save") this._save(target.closest("[data-notification]"));
+      else if (action === "save-device") this._saveDevice(target.closest("[data-device-notification]"));
       else if (action === "delete") this._delete(target.closest("[data-notification]"));
     }
 
@@ -326,6 +412,56 @@
       </article>`;
     }
 
+    _deviceCard(device, category, admin) {
+      const key = `${category}:${device.device_id}`;
+      const draft = this._deviceDrafts.get(key) || {enabled:Boolean(device.enabled)};
+      const busy = this._busy.has(key);
+      const unchanged = !this._isDeviceDirty(key);
+      const icon = category === "smoke_alarms" ? "mdi:smoke-detector" : "mdi:door";
+      const detail = category === "smoke_alarms"
+        ? device.device_type
+        : [device.sensor_type, device.device_type].filter(Boolean).join(" · ");
+      return `<article class="device-card" data-device-notification data-category="${category}" data-device-id="${device.device_id}">
+        <div class="device-heading">
+          <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
+          <div><h2>${esc(device.name || `${detail} ${device.device_id}`)}</h2>
+            <p>${esc(detail)}</p></div>
+          <span class="status configured">${esc(this._t(draft.enabled ? "notification.enabled" : "notification.disabled"))}</span>
+        </div>
+        <div class="device-controls">
+          <div><h3>${esc(this._t("notification.enabled"))}</h3>
+            <p>${esc(this._t("device.notification_description"))}</p></div>
+          <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
+            <span>${esc(this._t("notification.enabled"))}</span></label>
+          ${admin ? `<ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>` : ""}
+        </div>
+      </article>`;
+    }
+
+    _automationCard(automation) {
+      return `<article class="device-card">
+        <div class="device-heading">
+          <div class="equipment-icon"><ha-icon icon="mdi:robot"></ha-icon></div>
+          <div><h2>${esc(automation.name || `Automation ${automation.automation_id}`)}</h2>
+            <p>${esc(this._t("automation.notification_description"))}</p></div>
+          <span class="status ${automation.notification_enabled ? "configured" : ""}">${esc(this._t(automation.notification_enabled ? "notification.enabled" : "notification.disabled"))}</span>
+        </div>
+        <p class="app-managed">${esc(this._t("automation.app_managed"))}</p>
+      </article>`;
+    }
+
+    _categoryContent(category, admin) {
+      if (category === "equipment") {
+        return compatibleEquipment(this._notifications.equipment)
+          .map(item => this._equipmentCard(item, admin)).join("");
+      }
+      if (category === "automations") {
+        return this._notifications.automations.map(item => this._automationCard(item)).join("");
+      }
+      return this._notifications[category]
+        .map(item => this._deviceCard(item, category, admin)).join("");
+    }
+
     _style() {
       return `<style>
         :host { display:block; min-height:100%; color:var(--primary-text-color); background:var(--primary-background-color); font-family:var(--ha-font-family-body, sans-serif); }
@@ -345,15 +481,28 @@
         .hero { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:24px; }
         .hero h2 { margin:0 0 6px; font-size:28px; line-height:1.2; }
         .hero p { margin:0; color:var(--secondary-text-color); }
+        .category-tabs { display:flex; gap:4px; overflow:auto; margin:-4px 0 22px; border-bottom:1px solid var(--divider-color); }
+        .category-tab { min-height:48px; padding:0 18px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
+        .category-tab[aria-selected="true"] { color:var(--primary-color); border-bottom-color:var(--primary-color); }
         .refresh { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
         .message { padding:22px; border-radius:16px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
         .message.error { color:var(--error-color, #db4437); border-inline-start:4px solid currentColor; }
         .read-only { margin:0 0 16px; padding:12px 16px; border-radius:12px; color:var(--warning-color, #f0a000); background:color-mix(in srgb, currentColor 10%, transparent); }
         .equipment-list { display:grid; gap:20px; }
-        .equipment-card { overflow:hidden; border-radius:18px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
+        .equipment-card, .device-card { overflow:hidden; border-radius:18px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
         .equipment-heading { display:flex; align-items:center; gap:14px; padding:20px 22px; border-bottom:1px solid var(--divider-color); }
         .equipment-heading h2 { margin:0; font-size:20px; }
         .equipment-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
+        .device-heading { display:flex; align-items:center; gap:14px; padding:20px 22px; }
+        .device-heading h2 { margin:0; font-size:20px; }
+        .device-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
+        .device-heading .status { margin-inline-start:auto; }
+        .device-controls { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; align-items:center; gap:18px; padding:18px 22px; border-top:1px solid var(--divider-color); }
+        .device-controls h3 { margin:0 0 4px; font-size:16px; }
+        .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
+        .device-toggle { grid-column:auto; white-space:nowrap; }
+        .device-controls [hidden] { display:none !important; }
+        .app-managed { padding:0 22px 20px; }
         .equipment-icon, .notification-icon { display:grid; place-items:center; flex:0 0 auto; border-radius:14px; color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 12%, transparent); }
         .equipment-icon { width:46px; height:46px; }
         .notification-icon { width:40px; height:40px; }
@@ -388,6 +537,8 @@
           main { padding-top:20px; }
           .hero h2 { font-size:24px; }
           .notification-grid { grid-template-columns:1fr; }
+          .device-controls { grid-template-columns:1fr auto; }
+          .device-controls > div { grid-column:1 / -1; }
           .notification + .notification { border-inline-start:0; border-top:1px solid var(--divider-color); }
         }
         @media (max-width:500px) {
@@ -421,9 +572,14 @@
       if (this._loading) content = `<p class="message" role="status">${esc(this._t("panel.loading"))}</p>`;
       else if (this._error) content = `<div class="message error" role="alert">${esc(this._error)}<br><ha-button data-action="retry">${esc(this._t("panel.retry"))}</ha-button></div>`;
       else {
-        const equipment = compatibleEquipment(this._equipment);
+        const categories = availableCategories(this._notifications);
+        const categoryTabs = categories.length ? `<nav class="category-tabs" role="tablist">
+          ${categories.map(category => `<button class="category-tab" data-action="category" data-category="${category}" role="tab" aria-selected="${category === this._category}">${esc(this._t(`category.${category}`))}</button>`).join("")}
+        </nav>` : "";
+        const categoryContent = this._categoryContent(this._category, admin);
         content = `${admin ? "" : `<p class="read-only">${esc(this._t("panel.read_only"))}</p>`}
-          ${equipment.length ? `<div class="equipment-list">${equipment.map(item => this._equipmentCard(item, admin)).join("")}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
+          ${categoryTabs}
+          ${categoryContent ? `<div class="equipment-list">${categoryContent}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
       }
       this.shadowRoot.innerHTML = `${this._style()}
         <header class="${headerClass}">
@@ -440,6 +596,7 @@
 
   window.WiserNotificationsPanelTest = {
     compatibleEquipment,
+    availableCategories,
     languageFor,
     localize,
     notificationDraft,

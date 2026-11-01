@@ -16,6 +16,13 @@ export default function buildVersion({
 } = {}) {
   const packagePath = resolve(root, "package.json");
   const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+  const packageLockPath = resolve(root, "package-lock.json");
+  let packageLockData;
+  try {
+    packageLockData = JSON.parse(readFileSync(packageLockPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const packageVersion = packageData.version;
   let version = packageVersion;
   if (dev) {
@@ -48,6 +55,11 @@ export default function buildVersion({
       if (version !== packageVersion) {
         packageData.version = version;
         writeFileSync(packagePath, `${JSON.stringify(packageData, null, 2)}\n`);
+        if (packageLockData) {
+          packageLockData.version = version;
+          if (packageLockData.packages?.[""]) packageLockData.packages[""].version = version;
+          writeFileSync(packageLockPath, `${JSON.stringify(packageLockData, null, 2)}\n`);
+        }
       }
     },
   };
