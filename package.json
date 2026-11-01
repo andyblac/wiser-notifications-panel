@@ -1,0 +1,17 @@
+{
+  "name": "wiser-notifications-panel",
+  "version": "0.1.0-dev.1",
+  "private": true,
+  "description": "Native Wiser power notification management panel for Home Assistant",
+  "license": "MIT",
+  "scripts": {
+    "test": "npm run build:test && node --test tests/*.test.cjs tests/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build.mjs --test",
+    "build:dev": "node scripts/build.mjs --dev",
+    "build:release": "node scripts/build.mjs --release"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
