@@ -55,6 +55,29 @@
     });
   }
 
+  function deviceColumns(value) {
+    const columns = Number(value);
+    return [1, 2, 3, 4].includes(columns) ? columns : 2;
+  }
+
+  function itemId(category, item) {
+    if (category === "equipment") return String(item.equipment_id);
+    if (category === "automations") return String(item.automation_id);
+    return String(item.device_id);
+  }
+
+  function orderedItems(category, items, order) {
+    const positions = new Map((Array.isArray(order) ? order : [])
+      .map((id, index) => [String(id), index]));
+    return items.map((item, index) => ({item, index}))
+      .sort((left, right) => (
+        (positions.get(itemId(category, left.item)) ?? Number.MAX_SAFE_INTEGER)
+        - (positions.get(itemId(category, right.item)) ?? Number.MAX_SAFE_INTEGER)
+        || left.index - right.index
+      ))
+      .map(({item}) => item);
+  }
+
   class WiserNotificationsPanel extends HTMLElement {
     static panelApiVersion = 1;
 
@@ -79,10 +102,19 @@
       this._loading = true;
       this._error = "";
       this._message = "";
+      this._settingsOpen = false;
+      this._settingsDraft = null;
+      this._settingsError = "";
+      this._savingSettings = false;
+      this._draggedItem = null;
       this._renderFrame = 0;
       this.shadowRoot.addEventListener("click", event => this._click(event));
       this.shadowRoot.addEventListener("input", event => this._input(event));
       this.shadowRoot.addEventListener("change", event => this._input(event));
+      this.shadowRoot.addEventListener("dragstart", event => this._settingsDragStart(event));
+      this.shadowRoot.addEventListener("dragover", event => this._settingsDragOver(event));
+      this.shadowRoot.addEventListener("drop", event => this._settingsDrop(event));
+      this.shadowRoot.addEventListener("dragend", () => this._clearSettingsDrag());
     }
 
     set hass(value) {
@@ -341,6 +373,152 @@
       }
     }
 
+    _hubSettings(hub = this._hub) {
+      return this._config?.card_configs?.[hub] || {};
+    }
+
+    _categoryItems(category) {
+      const items = category === "equipment"
+        ? compatibleEquipment(this._notifications.equipment)
+        : this._notifications[category] || [];
+      return orderedItems(category, items, this._hubSettings()?.item_order?.[category]);
+    }
+
+    _itemName(category, item) {
+      if (item.name) return item.name;
+      if (category === "equipment") return `${item.device_type || "Equipment"} ${item.equipment_id}`;
+      if (category === "automations") return `Automation ${item.automation_id}`;
+      return `${item.device_type || item.sensor_type || "Device"} ${item.device_id}`;
+    }
+
+    _openSettings() {
+      if (!this._hass?.user?.is_admin || !this._config?.panel_id || !this._hub) return;
+      const settings = this._hubSettings();
+      const itemOrder = {...(settings.item_order || {})};
+      for (const category of availableCategories(this._notifications)) {
+        itemOrder[category] = this._categoryItems(category)
+          .map(item => itemId(category, item));
+      }
+      this._settingsDraft = {
+        columns:deviceColumns(settings.columns),
+        item_order:itemOrder,
+      };
+      this._settingsError = "";
+      this._settingsOpen = true;
+      this._renderSoon();
+    }
+
+    _openEditor() {
+      this._openSettings();
+    }
+
+    _closeSettings() {
+      this._settingsOpen = false;
+      this._settingsDraft = null;
+      this._settingsError = "";
+      this._draggedItem = null;
+      this._renderSoon();
+    }
+
+    async _saveSettings() {
+      if (!this._settingsDraft || this._savingSettings || !this._config?.panel_id) return;
+      this._savingSettings = true;
+      this._settingsError = "";
+      this._renderSettingsState();
+      try {
+        const settings = {...this._hubSettings()};
+        settings.columns = deviceColumns(this._settingsDraft.columns);
+        settings.item_order = Object.fromEntries(Object.entries(this._settingsDraft.item_order)
+          .map(([category, order]) => [category, [...new Set(order.map(String))]]));
+        await this._hass.callWS({
+          type:"wiser/panel/configure",
+          panel_id:this._config.panel_id,
+          configs:{[this._hub]:settings},
+        });
+        this._config = {
+          ...this._config,
+          card_configs:{...this._config.card_configs, [this._hub]:settings},
+        };
+        this._closeSettings();
+      } catch (error) {
+        this._settingsError = this._t("panel.settings_save_error", {error:error?.message || error});
+        this._renderSettingsState();
+      } finally {
+        this._savingSettings = false;
+        this._renderSettingsState();
+      }
+    }
+
+    _settingsDragStart(event) {
+      const handle = event.target?.closest?.(".order-drag-handle");
+      const row = handle?.closest?.(".order-item");
+      if (!row || !this._settingsDraft) return;
+      this._draggedItem = {category:row.dataset.category, id:row.dataset.itemId};
+      row.classList.add("dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", row.dataset.itemId);
+      }
+    }
+
+    _settingsDropPosition(event) {
+      if (!this._draggedItem) return null;
+      const row = event.target?.closest?.(".order-item");
+      const list = row?.parentElement || event.target?.closest?.(".order-list");
+      if (!list || list.dataset.category !== this._draggedItem.category) return null;
+      if (!row || row.dataset.itemId === this._draggedItem.id) return {list, row:null, after:false};
+      const rect = row.getBoundingClientRect();
+      return {list, row, after:event.clientY >= rect.top + rect.height / 2};
+    }
+
+    _settingsDragOver(event) {
+      const position = this._settingsDropPosition(event);
+      if (!position) return;
+      event.preventDefault();
+      for (const row of position.list.querySelectorAll(".order-item")) {
+        row.classList.remove("drop-before", "drop-after");
+      }
+      position.row?.classList.add(position.after ? "drop-after" : "drop-before");
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    }
+
+    _settingsDrop(event) {
+      const position = this._settingsDropPosition(event);
+      const dragged = this._draggedItem;
+      if (!position || !dragged) return;
+      event.preventDefault();
+      const draggedRow = Array.from(position.list.querySelectorAll(".order-item"))
+        .find(row => row.dataset.itemId === dragged.id);
+      if (draggedRow) {
+        if (position.row) {
+          position.list.insertBefore(draggedRow, position.after ? position.row.nextSibling : position.row);
+        } else {
+          position.list.append(draggedRow);
+        }
+      }
+      this._settingsDraft.item_order[dragged.category] = Array.from(
+        position.list.querySelectorAll(".order-item"), row => row.dataset.itemId,
+      );
+      this._clearSettingsDrag();
+    }
+
+    _clearSettingsDrag() {
+      this._draggedItem = null;
+      for (const row of this.shadowRoot.querySelectorAll?.(".order-item") || []) {
+        row.classList.remove("dragging", "drop-before", "drop-after");
+      }
+    }
+
+    _renderSettingsState() {
+      const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
+      if (!dialog || !this._settingsOpen) return;
+      const error = dialog.querySelector?.(".settings-error");
+      if (error) error.textContent = this._settingsError;
+      for (const control of dialog.querySelectorAll?.(".column-selector, [data-action='settings-cancel'], [data-action='settings-save']") || []) {
+        control.disabled = this._savingSettings;
+      }
+    }
+
     _click(event) {
       const target = event.target?.closest?.("[data-action]");
       if (!target) return;
@@ -356,6 +534,9 @@
           this._renderSoon();
         }
       }
+      else if (action === "settings") this._openSettings();
+      else if (action === "settings-cancel") this._closeSettings();
+      else if (action === "settings-save") this._saveSettings();
       else if (action === "save") this._save(target.closest("[data-notification]"));
       else if (action === "save-device") this._saveDevice(target.closest("[data-device-notification]"));
       else if (action === "delete") this._delete(target.closest("[data-notification]"));
@@ -387,13 +568,15 @@
           <label><span>${esc(this._t("notification.period"))}</span>
             <span class="number-field"><input data-field="period_mins" type="number" min="0" step="1" required value="${draft.period_mins}"${controlsDisabled}>
               <span>${esc(this._t("notification.minutes"))}</span></span></label>
+        </div>
+        <div class="notification-footer">
           <label class="enabled"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${controlsDisabled}>
             <span>${esc(this._t("notification.enabled"))}</span></label>
+          ${admin ? `<div class="actions">
+            ${configured ? `<ha-button appearance="outlined" variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
+            <ha-button data-action="save"${saveHidden}${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
+          </div>` : ""}
         </div>
-        ${admin ? `<div class="actions">
-          ${configured ? `<ha-button appearance="outlined" variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
-          <ha-button data-action="save"${saveHidden}${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
-        </div>` : ""}
       </section>`;
     }
 
@@ -452,19 +635,55 @@
 
     _categoryContent(category, admin) {
       if (category === "equipment") {
-        return compatibleEquipment(this._notifications.equipment)
+        return this._categoryItems(category)
           .map(item => this._equipmentCard(item, admin)).join("");
       }
       if (category === "automations") {
-        return this._notifications.automations.map(item => this._automationCard(item)).join("");
+        return this._categoryItems(category).map(item => this._automationCard(item)).join("");
       }
-      return this._notifications[category]
+      return this._categoryItems(category)
         .map(item => this._deviceCard(item, category, admin)).join("");
+    }
+
+    _settingsMarkup() {
+      if (!this._settingsDraft) return "";
+      const categories = availableCategories(this._notifications);
+      const orderSections = categories.map(category => {
+        const items = category === "equipment"
+          ? compatibleEquipment(this._notifications.equipment)
+          : this._notifications[category] || [];
+        const ordered = orderedItems(category, items, this._settingsDraft.item_order[category]);
+        const rows = ordered.map(item => `<div class="order-item" data-category="${esc(category)}" data-item-id="${esc(itemId(category, item))}">
+          <ha-icon class="order-drag-handle" icon="mdi:drag-vertical" draggable="true"></ha-icon>
+          <span>${esc(this._itemName(category, item))}</span>
+        </div>`).join("");
+        return `<section class="order-section">
+          <h3>${esc(this._t(`category.${category}`))}</h3>
+          <div class="order-list" data-category="${esc(category)}">${rows}</div>
+        </section>`;
+      }).join("");
+      return `<div class="settings-content">
+          <p>${esc(this._t("panel.settings_description"))}</p>
+          <label class="column-setting">
+            <span>${esc(this._t("panel.devices_per_row"))}</span>
+            <ha-selector class="column-selector"></ha-selector>
+          </label>
+          <section class="order-settings">
+            <h2>${esc(this._t("panel.device_order"))}</h2>
+            <p>${esc(this._t("panel.order_hint"))}</p>
+            ${orderSections}
+          </section>
+          <p class="settings-error" role="alert">${esc(this._settingsError)}</p>
+        </div>
+        <div class="settings-actions" id="settings-actions" slot="footer">
+          <ha-button appearance="plain" data-action="settings-cancel"${this._savingSettings ? " disabled" : ""}>${esc(this._t("action.cancel"))}</ha-button>
+          <ha-button data-action="settings-save"${this._savingSettings ? " disabled" : ""}>${esc(this._t("action.save"))}</ha-button>
+        </div>`;
     }
 
     _style() {
       return `<style>
-        :host { display:block; min-height:100%; color:var(--primary-text-color); background:var(--primary-background-color); font-family:var(--ha-font-family-body, sans-serif); }
+        :host { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; color:var(--primary-text-color); background:var(--primary-background-color); font-family:var(--ha-font-family-body, sans-serif); }
         * { box-sizing:border-box; }
         .app-header { position:sticky; top:0; z-index:3; display:flex; align-items:center; min-height:64px; gap:12px; padding:0 16px; color:var(--app-header-text-color); background:var(--app-header-background-color); box-shadow:var(--ha-card-box-shadow, 0 1px 3px rgba(0,0,0,.16)); }
         .app-header h1 { margin:0; font-size:20px; font-weight:400; white-space:nowrap; }
@@ -476,59 +695,115 @@
         :host([nested]) .app-header { min-height:56px; }
         :host([nested]) .menu-button, :host([nested]) .app-header h1 { display:none; }
         :host([nested]) .hub-tabs { margin-inline-start:0; }
+        :host([nested]) .header-settings { display:none; }
         :host([nested]) .app-header.single-hub { display:none; }
-        main { width:min(1500px, 100%); margin:0 auto; padding:28px clamp(12px, 3vw, 40px) 48px; }
+        main { flex:1 1 auto; width:100%; min-height:0; margin:0; padding:24px clamp(12px, 3vw, 32px) 40px; overflow-y:auto; overscroll-behavior:contain; }
         .hero { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:24px; }
         .hero h2 { margin:0 0 6px; font-size:28px; line-height:1.2; }
         .hero p { margin:0; color:var(--secondary-text-color); }
         .category-tabs { display:flex; gap:4px; overflow:auto; margin:-4px 0 22px; border-bottom:1px solid var(--divider-color); }
         .category-tab { min-height:48px; padding:0 18px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
         .category-tab[aria-selected="true"] { color:var(--primary-color); border-bottom-color:var(--primary-color); }
-        .refresh { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+        .refresh { display:flex; align-items:center; gap:8px; }
         .message { padding:22px; border-radius:16px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
         .message.error { color:var(--error-color, #db4437); border-inline-start:4px solid currentColor; }
         .read-only { margin:0 0 16px; padding:12px 16px; border-radius:12px; color:var(--warning-color, #f0a000); background:color-mix(in srgb, currentColor 10%, transparent); }
-        .equipment-list { display:grid; gap:20px; }
-        .equipment-card, .device-card { overflow:hidden; border-radius:18px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
-        .equipment-heading { display:flex; align-items:center; gap:14px; padding:20px 22px; border-bottom:1px solid var(--divider-color); }
-        .equipment-heading h2 { margin:0; font-size:20px; }
+        .equipment-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:start; gap:16px; }
+        .equipment-list.columns-1 { grid-template-columns:minmax(0, 1fr); }
+        .equipment-list.columns-3 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+        .equipment-list.columns-4 { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+        .equipment-card, .device-card { container-type:inline-size; overflow:hidden; border-radius:16px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
+        .equipment-heading { display:flex; align-items:center; gap:12px; padding:15px 17px; border-bottom:1px solid var(--divider-color); }
+        .equipment-heading h2 { margin:0; font-size:18px; }
         .equipment-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
-        .device-heading { display:flex; align-items:center; gap:14px; padding:20px 22px; }
-        .device-heading h2 { margin:0; font-size:20px; }
+        .device-heading { display:flex; align-items:center; gap:12px; padding:15px 17px; }
+        .device-heading h2 { margin:0; font-size:18px; }
         .device-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
         .device-heading .status { margin-inline-start:auto; }
-        .device-controls { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; align-items:center; gap:18px; padding:18px 22px; border-top:1px solid var(--divider-color); }
+        .device-controls { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; align-items:center; gap:14px; padding:14px 17px; border-top:1px solid var(--divider-color); }
         .device-controls h3 { margin:0 0 4px; font-size:16px; }
         .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
         .device-toggle { grid-column:auto; white-space:nowrap; }
         .device-controls [hidden] { display:none !important; }
-        .app-managed { padding:0 22px 20px; }
+        .app-managed { padding:0 17px 15px; }
         .equipment-icon, .notification-icon { display:grid; place-items:center; flex:0 0 auto; border-radius:14px; color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 12%, transparent); }
-        .equipment-icon { width:46px; height:46px; }
-        .notification-icon { width:40px; height:40px; }
+        .equipment-icon { width:40px; height:40px; }
+        .notification-icon { width:36px; height:36px; }
         .notification-icon.under { color:var(--info-color, #039be5); background:color-mix(in srgb, currentColor 12%, transparent); }
         .notification-icon.over { color:var(--warning-color, #f0a000); background:color-mix(in srgb, currentColor 12%, transparent); }
         .monitoring { margin-inline-start:auto; padding:5px 9px; border-radius:999px; color:var(--secondary-text-color); background:var(--secondary-background-color); font-size:12px; }
         .notification-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
-        .notification { min-width:0; padding:22px; }
+        .notification { min-width:0; padding:16px 17px; }
         .notification + .notification { border-inline-start:1px solid var(--divider-color); }
-        .notification-heading { display:grid; grid-template-columns:auto minmax(0, 1fr); align-items:start; gap:12px; min-height:100px; }
-        .notification-heading h3 { margin:0 0 5px; font-size:17px; }
+        .notification-heading { display:grid; grid-template-columns:auto minmax(0, 1fr); align-items:start; gap:10px; min-height:78px; }
+        .notification-heading h3 { margin:0 0 4px; font-size:16px; }
         .notification-heading p { margin:0; color:var(--secondary-text-color); font-size:13px; line-height:1.45; }
         .status { grid-column:2; justify-self:start; padding:4px 8px; border-radius:999px; color:var(--secondary-text-color); background:var(--secondary-background-color); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
         .status.configured { color:var(--success-color, #43a047); background:color-mix(in srgb, currentColor 12%, transparent); }
-        .fields { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px; }
+        .fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
         .fields label { display:grid; gap:7px; color:var(--secondary-text-color); font-size:13px; }
-        .number-field { display:flex; align-items:center; overflow:hidden; min-height:44px; border:1px solid var(--divider-color); border-radius:10px; background:var(--primary-background-color); }
+        .number-field { display:flex; align-items:center; overflow:hidden; min-height:40px; border:1px solid var(--divider-color); border-radius:10px; background:var(--primary-background-color); }
         .number-field:focus-within { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
-        .number-field input { width:100%; min-width:0; padding:10px 12px; border:0; outline:0; color:var(--primary-text-color); background:transparent; font:inherit; font-size:16px; }
-        .number-field > span { padding:0 12px; color:var(--secondary-text-color); white-space:nowrap; }
+        .number-field input { width:100%; min-width:0; padding:8px 10px; border:0; outline:0; color:var(--primary-text-color); background:transparent; font:inherit; font-size:15px; }
+        .number-field > span { padding:0 10px; color:var(--secondary-text-color); white-space:nowrap; }
         .enabled { grid-column:1 / -1; display:flex !important; align-items:center; gap:9px !important; min-height:34px; color:var(--primary-text-color) !important; }
         .enabled input { width:19px; height:19px; margin:0; accent-color:var(--primary-color); }
         input:disabled { opacity:.6; }
-        .actions { display:flex; justify-content:flex-end; gap:8px; min-height:44px; margin-top:14px; }
+        .notification-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; min-height:40px; margin-top:10px; }
+        .notification-footer .enabled { grid-column:auto; }
+        .actions { display:flex; justify-content:flex-end; gap:8px; min-height:40px; }
         .actions [hidden] { display:none !important; }
         .actions ha-circular-progress { --mdc-theme-primary:currentColor; }
+        .settings-content { width:100%; max-width:600px; padding:4px 2px 16px; }
+        .settings-content > p { margin:0 0 18px; color:var(--secondary-text-color); }
+        .column-setting { display:grid; grid-template-columns:minmax(0, 1fr) minmax(150px, 180px); align-items:center; gap:24px; margin:8px 0 18px; font-weight:500; }
+        .column-setting .column-selector { display:block; width:100%; min-width:0; }
+        .order-settings { border-top:1px solid var(--divider-color); padding-top:18px; }
+        .order-settings > h2 { margin:0 0 4px; font-size:18px; }
+        .order-settings > p { margin:0 0 16px; color:var(--secondary-text-color); font-size:13px; }
+        .order-section + .order-section { margin-top:18px; }
+        .order-section h3 { margin:0 0 8px; font-size:15px; }
+        .order-list { display:grid; gap:6px; }
+        .order-item { position:relative; display:grid; grid-template-columns:32px minmax(0, 1fr); align-items:center; min-height:44px; padding:6px 12px 6px 6px; border:1px solid var(--divider-color); border-radius:10px; background:var(--ha-card-background, var(--card-background-color)); }
+        .order-drag-handle { cursor:grab; color:var(--secondary-text-color); }
+        .order-drag-handle:active { cursor:grabbing; }
+        .order-item.dragging { opacity:.45; }
+        .order-item.drop-before::before, .order-item.drop-after::after { content:""; position:absolute; right:0; left:0; height:3px; border-radius:2px; background:var(--primary-color); }
+        .order-item.drop-before::before { top:-5px; }
+        .order-item.drop-after::after { bottom:-5px; }
+        .settings-error { min-height:20px; margin:14px 0 0 !important; color:var(--error-color, #db4437) !important; }
+        .settings-actions { display:flex; justify-content:flex-end; gap:8px; }
+        @container (max-width:680px) {
+          .fields { grid-template-columns:1fr; }
+          .notification-heading { min-height:124px; }
+          .notification-footer { align-items:flex-end; }
+        }
+        @container (max-width:560px) {
+          .equipment-heading, .device-heading { gap:9px; padding:11px 12px; }
+          .equipment-heading h2, .device-heading h2 { font-size:16px; }
+          .equipment-heading p, .device-heading p { margin-top:2px; font-size:11px; }
+          .equipment-icon { width:34px; height:34px; border-radius:11px; }
+          .monitoring { padding:3px 6px; font-size:10px; }
+          .notification { padding:11px 12px; }
+          .notification-icon { width:30px; height:30px; border-radius:10px; }
+          .notification-heading { gap:7px; min-height:104px; }
+          .notification-heading h3 { margin-bottom:3px; font-size:14px; }
+          .notification-heading p { font-size:11px; line-height:1.35; }
+          .status { padding:3px 6px; font-size:9px; }
+          .fields { gap:7px; margin-top:8px; }
+          .fields label { gap:4px; font-size:11px; }
+          .number-field { min-height:35px; border-radius:8px; }
+          .number-field input { padding:6px 8px; font-size:14px; }
+          .number-field > span { padding:0 7px; font-size:11px; }
+          .notification-footer { min-height:36px; margin-top:7px; }
+          .enabled { gap:6px !important; min-height:30px; font-size:12px; }
+          .enabled input { width:17px; height:17px; }
+          .actions { min-height:36px; }
+          .device-controls { gap:9px; padding:11px 12px; }
+          .device-controls h3 { font-size:14px; }
+          .device-controls p, .app-managed { font-size:11px; }
+          .app-managed { padding:0 12px 12px; }
+        }
         @media (max-width:800px) {
           .app-header { padding:0 8px; gap:4px; }
           .app-header h1 { font-size:16px; }
@@ -536,10 +811,8 @@
           .hub-tab { padding:0 12px; }
           main { padding-top:20px; }
           .hero h2 { font-size:24px; }
-          .notification-grid { grid-template-columns:1fr; }
           .device-controls { grid-template-columns:1fr auto; }
           .device-controls > div { grid-column:1 / -1; }
-          .notification + .notification { border-inline-start:0; border-top:1px solid var(--divider-color); }
         }
         @media (max-width:500px) {
           .hero { align-items:center; }
@@ -564,10 +837,11 @@
     _render() {
       const admin = Boolean(this._hass?.user?.is_admin);
       const hubs = this._hubs;
+      const canConfigure = admin && Boolean(this._config?.panel_id);
       const tabs = hubs.length > 1 ? `<nav class="hub-tabs" role="tablist" aria-label="${esc(this._t("panel.hubs"))}">
         ${hubs.map(hub => `<button class="hub-tab" data-action="hub" data-hub="${esc(hub)}" role="tab" aria-selected="${hub === this._hub}">${esc(hub)}</button>`).join("")}
       </nav>` : `<div class="hub-tabs"></div>`;
-      const headerClass = hubs.length <= 1 ? "app-header single-hub" : "app-header";
+      const headerClass = `app-header${hubs.length <= 1 ? " single-hub" : ""}${canConfigure ? " has-settings" : ""}`;
       let content;
       if (this._loading) content = `<p class="message" role="status">${esc(this._t("panel.loading"))}</p>`;
       else if (this._error) content = `<div class="message error" role="alert">${esc(this._error)}<br><ha-button data-action="retry">${esc(this._t("panel.retry"))}</ha-button></div>`;
@@ -577,29 +851,61 @@
           ${categories.map(category => `<button class="category-tab" data-action="category" data-category="${category}" role="tab" aria-selected="${category === this._category}">${esc(this._t(`category.${category}`))}</button>`).join("")}
         </nav>` : "";
         const categoryContent = this._categoryContent(this._category, admin);
+        const columns = deviceColumns(this._hubSettings().columns);
         content = `${admin ? "" : `<p class="read-only">${esc(this._t("panel.read_only"))}</p>`}
           ${categoryTabs}
-          ${categoryContent ? `<div class="equipment-list">${categoryContent}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
+          ${categoryContent ? `<div class="equipment-list category-${esc(this._category)} columns-${columns}">${categoryContent}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
       }
       this.shadowRoot.innerHTML = `${this._style()}
         <header class="${headerClass}">
           <button class="icon-button menu-button" data-action="menu" aria-label="${esc(this._t("panel.menu"))}"><ha-icon icon="mdi:menu"></ha-icon></button>
           <h1>${esc(this._t("panel.title"))}</h1>${tabs}
+          ${canConfigure ? `<ha-button class="header-settings" appearance="plain" data-action="settings" aria-label="${esc(this._t("panel.settings"))}" title="${esc(this._t("panel.settings"))}"><ha-icon icon="mdi:cog"></ha-icon></ha-button>` : ""}
         </header>
         <main>
           <div class="hero"><div><h2>${esc(this._t("panel.title"))}</h2><p>${esc(this._t("panel.subtitle"))}</p></div>
             <ha-button class="refresh" appearance="plain" data-action="refresh"><ha-icon icon="mdi:refresh"></ha-icon><span>${esc(this._t("panel.refresh"))}</span></ha-button></div>
           <div aria-live="polite">${content}</div>
-        </main>`;
+        </main>
+        <ha-dialog id="settings-dialog" width="medium">${this._settingsOpen ? this._settingsMarkup() : ""}</ha-dialog>`;
+      if (this._settingsOpen) {
+        const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
+        if (dialog) {
+          const heading = `${this._hub} - ${this._t("panel.settings")}`;
+          dialog.setAttribute?.("aria-label", heading);
+          dialog.setAttribute?.("header-title", heading);
+          dialog.heading = heading;
+          if (!("headerTitle" in (customElements.get("ha-dialog")?.prototype || {}))) {
+            dialog.querySelector?.("#settings-actions")?.removeAttribute("slot");
+          }
+          dialog.addEventListener?.("closed", () => this._closeSettings(), {once:true});
+          dialog.addEventListener?.("close-dialog", () => this._closeSettings(), {once:true});
+          const columnSelector = dialog.querySelector?.(".column-selector");
+          if (columnSelector) {
+            columnSelector.hass = this._hass;
+            columnSelector.selector = {number:{min:1, max:4, step:1, mode:"box"}};
+            columnSelector.value = this._settingsDraft.columns;
+            columnSelector.addEventListener?.("value-changed", event => {
+              event.stopPropagation();
+              this._settingsDraft.columns = deviceColumns(event.detail?.value);
+              columnSelector.value = this._settingsDraft.columns;
+            });
+          }
+          dialog.open = true;
+        }
+      }
     }
   }
 
   window.WiserNotificationsPanelTest = {
     compatibleEquipment,
     availableCategories,
+    deviceColumns,
+    itemId,
     languageFor,
     localize,
     notificationDraft,
+    orderedItems,
   };
   if (!customElements.get("wiser-notifications-panel")) {
     customElements.define("wiser-notifications-panel", WiserNotificationsPanel);

@@ -45,6 +45,7 @@ test("registers the Wiser Notifications panel", () => {
   const {Panel} = setup();
   assert.equal(typeof Panel, "function");
   assert.equal(Panel.panelApiVersion, 1);
+  assert.equal(typeof Panel.prototype._openEditor, "function");
 });
 
 test("routine Home Assistant updates do not rebuild an active form", () => {
@@ -106,6 +107,23 @@ test("shows tabs only for notification categories reported by the hub", () => {
     Array.from(helpers.availableCategories(notifications)),
     ["equipment", "sensors"],
   );
+});
+
+test("orders devices from saved panel settings and appends new devices", () => {
+  const {helpers} = setup();
+  const items = [
+    {equipment_id:1, name:"One"},
+    {equipment_id:2, name:"Two"},
+    {equipment_id:3, name:"Three"},
+  ];
+  assert.deepEqual(
+    Array.from(helpers.orderedItems("equipment", items, ["3", "1"]), item => item.equipment_id),
+    [3, 1, 2],
+  );
+  assert.equal(helpers.deviceColumns(3), 3);
+  assert.equal(helpers.deviceColumns(4), 4);
+  assert.equal(helpers.deviceColumns(5), 2);
+  assert.equal(helpers.deviceColumns("invalid"), 2);
 });
 
 test("localizes supported languages and falls back to English", () => {
@@ -218,6 +236,54 @@ test("saves a supported device notification toggle", async () => {
     enabled:false,
   });
   assert.equal(panel._deviceDrafts.get("sensors:8").enabled, false);
+});
+
+test("saves notification layout settings through the shared panel API", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._config = {
+    panel_id:"notifications",
+    card_configs:{Home:{existing_setting:true}},
+  };
+  panel._settingsOpen = true;
+  panel._settingsDraft = {
+    columns:3,
+    item_order:{equipment:["2", "1"], sensors:["8"]},
+  };
+  let request;
+  panel._hass = {callWS:async message => { request = message; }};
+
+  await panel._saveSettings();
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/panel/configure",
+    panel_id:"notifications",
+    configs:{Home:{
+      existing_setting:true,
+      columns:3,
+      item_order:{equipment:["2", "1"], sensors:["8"]},
+    }},
+  });
+  assert.equal(panel._config.card_configs.Home.columns, 3);
+  assert.equal(panel._settingsOpen, false);
+});
+
+test("uses the native Home Assistant selector for device columns", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[{equipment_id:1, name:"Plug", monitored:true, notifications:{}}],
+    smoke_alarms:[], sensors:[], automations:[],
+  };
+  panel._settingsDraft = {columns:2, item_order:{equipment:["1"]}};
+
+  const markup = panel._settingsMarkup();
+
+  assert.match(markup, /<ha-selector class="column-selector"><\/ha-selector>/);
+  assert.doesNotMatch(markup, /<ha-form/);
+  assert.doesNotMatch(markup, /<select/);
 });
 
 test("tracks changed settings and keeps unchanged saves disabled", () => {
