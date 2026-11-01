@@ -58,6 +58,7 @@
       this._hub = "";
       this._equipment = [];
       this._drafts = new Map();
+      this._originalDrafts = new Map();
       this._busy = new Set();
       this._loading = true;
       this._error = "";
@@ -71,9 +72,12 @@
     set hass(value) {
       const first = !this._hass;
       const connectionChanged = this._hass?.connection && this._hass.connection !== value?.connection;
+      const languageChanged = !first && languageFor(this._hass) !== languageFor(value);
+      const adminChanged = !first
+        && Boolean(this._hass?.user?.is_admin) !== Boolean(value?.user?.is_admin);
       this._hass = value;
       if ((first || connectionChanged) && this.isConnected) this._load();
-      else this._renderSoon();
+      else if (languageChanged || adminChanged) this._renderSoon();
     }
 
     set panel(value) {
@@ -117,13 +121,25 @@
 
     _seedDrafts() {
       const next = new Map();
+      const originals = new Map();
       for (const equipment of this._equipment) {
         for (const type of TYPES) {
           const key = this._key(equipment.equipment_id, type);
-          next.set(key, notificationDraft(equipment.notifications?.[type], type));
+          const draft = notificationDraft(equipment.notifications?.[type], type);
+          next.set(key, draft);
+          originals.set(key, {...draft});
         }
       }
       this._drafts = next;
+      this._originalDrafts = originals;
+    }
+
+    _isDirty(key) {
+      const draft = this._drafts.get(key);
+      const original = this._originalDrafts.get(key);
+      if (!draft || !original) return Boolean(draft);
+      return ["period_mins", "limit", "enabled"]
+        .some(field => draft[field] !== original[field]);
     }
 
     async _load(silent = false) {
@@ -171,6 +187,12 @@
       if (!draft) return;
       if (input.dataset.field === "enabled") draft.enabled = input.checked;
       else draft[input.dataset.field] = Number(input.value);
+      const save = section.querySelector?.('[data-action="save"]');
+      const unchanged = draft.configured && !this._isDirty(key);
+      save?.toggleAttribute?.("hidden", unchanged);
+      save?.toggleAttribute?.("disabled", unchanged);
+      const remove = section.querySelector?.('[data-action="delete"]');
+      remove?.toggleAttribute?.("hidden", draft.configured && !unchanged);
     }
 
     _notify(message) {
@@ -187,10 +209,11 @@
       const equipmentId = Number(section.dataset.equipmentId);
       const type = section.dataset.notification;
       const key = this._key(equipmentId, type);
+      const draft = this._drafts.get(key);
+      if (!draft || (draft.configured && !this._isDirty(key))) return;
       const inputs = [...section.querySelectorAll("input[data-field]")];
       if (!inputs.every(input => input.reportValidity())) return;
-      const draft = this._drafts.get(key);
-      if (!draft || !Number.isInteger(draft.period_mins) || !Number.isInteger(draft.limit)) return;
+      if (!Number.isInteger(draft.period_mins) || !Number.isInteger(draft.limit)) return;
       this._busy.add(key);
       this._error = "";
       this._renderSoon();
@@ -256,8 +279,14 @@
       const key = this._key(equipment.equipment_id, type);
       const draft = this._drafts.get(key) || notificationDraft(null, type);
       const busy = this._busy.has(key);
-      const disabled = !admin || busy ? " disabled" : "";
+      const controlsDisabled = !admin || busy ? " disabled" : "";
       const configured = draft.configured;
+      const unchanged = configured && !this._isDirty(key);
+      const saveDisabled = !admin || busy || unchanged
+        ? " disabled"
+        : "";
+      const saveHidden = unchanged ? " hidden" : "";
+      const deleteHidden = configured && !unchanged ? " hidden" : "";
       return `<section class="notification" data-notification="${type}" data-equipment-id="${equipment.equipment_id}">
         <div class="notification-heading">
           <div class="notification-icon ${type}"><ha-icon icon="${type === "under" ? "mdi:trending-down" : "mdi:trending-up"}"></ha-icon></div>
@@ -267,17 +296,17 @@
         </div>
         <div class="fields">
           <label><span>${esc(this._t("notification.limit"))}</span>
-            <span class="number-field"><input data-field="limit" type="number" min="0" step="1" required value="${draft.limit}"${disabled}>
+            <span class="number-field"><input data-field="limit" type="number" min="0" step="1" required value="${draft.limit}"${controlsDisabled}>
               <span>${esc(this._t("notification.watts"))}</span></span></label>
           <label><span>${esc(this._t("notification.period"))}</span>
-            <span class="number-field"><input data-field="period_mins" type="number" min="0" step="1" required value="${draft.period_mins}"${disabled}>
+            <span class="number-field"><input data-field="period_mins" type="number" min="0" step="1" required value="${draft.period_mins}"${controlsDisabled}>
               <span>${esc(this._t("notification.minutes"))}</span></span></label>
-          <label class="enabled"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${disabled}>
+          <label class="enabled"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${controlsDisabled}>
             <span>${esc(this._t("notification.enabled"))}</span></label>
         </div>
         ${admin ? `<div class="actions">
-          ${configured ? `<ha-button appearance="plain" data-action="delete"${disabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
-          <ha-button data-action="save"${disabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
+          ${configured ? `<ha-button appearance="outlined" variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
+          <ha-button data-action="save"${saveHidden}${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
         </div>` : ""}
       </section>`;
     }
@@ -349,6 +378,7 @@
         .enabled input { width:19px; height:19px; margin:0; accent-color:var(--primary-color); }
         input:disabled { opacity:.6; }
         .actions { display:flex; justify-content:flex-end; gap:8px; min-height:44px; margin-top:14px; }
+        .actions [hidden] { display:none !important; }
         .actions ha-circular-progress { --mdc-theme-primary:currentColor; }
         @media (max-width:800px) {
           .app-header { padding:0 8px; gap:4px; }
