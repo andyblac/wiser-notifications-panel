@@ -1,0 +1,20 @@
+name: Validate
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Check panel bundle
+        run: |
+          node --check dist/wiser-notifications-panel.js
+          node -e 'const fs=require("node:fs");const v=require("./package.json").version;const info=require("./dist/build-info.json");const bundle=fs.readFileSync("dist/wiser-notifications-panel.js","utf8");if(!bundle.startsWith(`/*! WISER-CARD-VERSION wiser-notifications-panel ${v} */`))throw Error("Bundle version mismatch");if(info.version!==v)throw Error("Build info version mismatch");'

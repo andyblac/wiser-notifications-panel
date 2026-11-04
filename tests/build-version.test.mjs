@@ -39,3 +39,9 @@ test("test builds preserve the package version", () => {
   build.complete(root);
   assert.equal(JSON.parse(readFileSync(join(root, "build-info.json"))).version, "0.1.0-dev.1");
 });
+
+test("release tags must match the semantic build version", () => {
+  const root = fixture("1.2.3");
+  assert.equal(buildVersion({root, releaseTag:"v1.2.3"}).version, "1.2.3");
+  assert.throws(() => buildVersion({root, releaseTag:"v1.2.4"}), /does not match/);
+});
