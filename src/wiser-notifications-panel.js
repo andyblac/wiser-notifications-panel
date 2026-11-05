@@ -220,15 +220,29 @@
       return `${equipmentId}:${type}`;
     }
 
-    _seedDrafts() {
+    _seedDrafts(preserveDirty = false) {
+      const previousDrafts = this._drafts;
+      const previousOriginals = this._originalDrafts;
+      const previousDeviceDrafts = this._deviceDrafts;
+      const previousOriginalDeviceDrafts = this._originalDeviceDrafts;
       const next = new Map();
       const originals = new Map();
       for (const equipment of this._notifications.equipment) {
         for (const type of TYPES) {
           const key = this._key(equipment.equipment_id, type);
           const draft = notificationDraft(equipment.notifications?.[type], type);
+          const original = {...draft};
+          if (preserveDirty) {
+            const previous = previousDrafts.get(key);
+            const previousOriginal = previousOriginals.get(key);
+            for (const field of ["period_mins", "limit", "enabled"]) {
+              if (previous && previousOriginal && previous[field] !== previousOriginal[field]) {
+                draft[field] = previous[field];
+              }
+            }
+          }
           next.set(key, draft);
-          originals.set(key, {...draft});
+          originals.set(key, original);
         }
       }
       this._drafts = next;
@@ -242,8 +256,18 @@
           if (category === "automations") {
             draft.notification_enabled = Boolean(device.notification_enabled);
           }
+          const original = {...draft};
+          if (preserveDirty) {
+            const previous = previousDeviceDrafts.get(key);
+            const previousOriginal = previousOriginalDeviceDrafts.get(key);
+            for (const field of Object.keys(draft)) {
+              if (previous && previousOriginal && previous[field] !== previousOriginal[field]) {
+                draft[field] = previous[field];
+              }
+            }
+          }
           deviceDrafts.set(key, draft);
-          originalDeviceDrafts.set(key, {...draft});
+          originalDeviceDrafts.set(key, original);
         }
       }
       this._deviceDrafts = deviceDrafts;
@@ -258,11 +282,9 @@
         .some(field => draft[field] !== original[field]);
     }
 
-    _isDeviceDirty(key) {
-      const draft = this._deviceDrafts.get(key);
-      const original = this._originalDeviceDrafts.get(key);
-      if (!draft || !original) return Boolean(draft);
-      return Object.keys(draft).some(field => draft[field] !== original[field]);
+    _isDeviceFieldDirty(key, field) {
+      return this._deviceDrafts.get(key)?.[field]
+        !== this._originalDeviceDrafts.get(key)?.[field];
     }
 
     async _load(silent = false) {
@@ -287,7 +309,7 @@
         }
         const categories = localizedCategories(this._notifications, this._hass);
         if (!categories.includes(this._category)) this._category = categories[0] || "equipment";
-        this._seedDrafts();
+        this._seedDrafts(silent);
         this._error = "";
       } catch (error) {
         this._error = this._t("panel.load_error", {error:error?.message || error});
@@ -315,8 +337,8 @@
         if (!draft) return;
         if (!(input.dataset.field in draft)) return;
         draft[input.dataset.field] = input.checked;
-        const save = deviceSection.querySelector?.('[data-action="save-device"]');
-        const unchanged = !this._isDeviceDirty(key);
+        const save = deviceSection.querySelector?.(`[data-action="save-device"][data-save-field="${input.dataset.field}"]`);
+        const unchanged = !this._isDeviceFieldDirty(key, input.dataset.field);
         save?.toggleAttribute?.("hidden", unchanged);
         save?.toggleAttribute?.("disabled", unchanged);
         return;
@@ -404,44 +426,41 @@
       }
     }
 
-    async _saveDevice(section) {
+    async _saveDevice(section, field = "enabled") {
       if (!this._hass?.user?.is_admin) return;
       const category = section.dataset.category;
       const deviceId = Number(section.dataset.deviceId);
       const key = `${category}:${deviceId}`;
       const draft = this._deviceDrafts.get(key);
-      if (!draft || !this._isDeviceDirty(key)) return;
+      if (!draft || !(field in draft) || !this._isDeviceFieldDirty(key, field)) return;
+      if (category !== "automations" && field !== "enabled") return;
+      const pending = Object.fromEntries(Object.keys(draft)
+        .filter(other => other !== field && this._isDeviceFieldDirty(key, other))
+        .map(other => [other, draft[other]]));
       this._busy.add(key);
       this._error = "";
       this._renderSoon();
       try {
-        const original = this._originalDeviceDrafts.get(key) || {};
-        const messages = category === "automations"
-          ? [
-              draft.enabled !== original.enabled ? {
-                type:"wiser/automation/set_enabled",
-                hub:this._hub,
-                automation_id:deviceId,
-                enabled:draft.enabled,
-              } : null,
-              draft.notification_enabled !== original.notification_enabled ? {
-                type:"wiser/automation/set_notification_enabled",
-                hub:this._hub,
-                automation_id:deviceId,
-                enabled:draft.notification_enabled,
-              } : null,
-            ].filter(Boolean)
-          : [{
+        const message = category === "automations"
+          ? {
+              type:field === "notification_enabled"
+                ? "wiser/automation/set_notification_enabled"
+                : "wiser/automation/set_enabled",
+              hub:this._hub,
+              automation_id:deviceId,
+              enabled:draft[field],
+            }
+          : {
               type:"wiser/device_notification/set",
               hub:this._hub,
               category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
               device_id:deviceId,
               enabled:draft.enabled,
-            }];
-        for (const message of messages) {
-          this._notifications = await this._hass.callWS(message);
-        }
+            };
+        this._notifications = await this._hass.callWS(message);
         this._seedDrafts();
+        const refreshed = this._deviceDrafts.get(key);
+        if (refreshed) Object.assign(refreshed, pending);
         this._notify(this._t("panel.saved"));
       } catch (error) {
         this._error = this._t("panel.save_error", {error:error?.message || error});
@@ -680,7 +699,10 @@
       else if (action === "settings-cancel") this._closeSettings();
       else if (action === "settings-save") this._saveSettings();
       else if (action === "save") this._save(target.closest("[data-notification]"));
-      else if (action === "save-device") this._saveDevice(target.closest("[data-device-control]"));
+      else if (action === "save-device") this._saveDevice(
+        target.closest("[data-device-control]"),
+        target.dataset.saveField || "enabled",
+      );
       else if (action === "delete-automation") this._openAutomationDelete(target.closest("[data-device-control]"));
       else if (action === "delete-automation-cancel") this._closeAutomationDelete();
       else if (action === "delete-automation-confirm") this._confirmAutomationDelete();
@@ -740,6 +762,75 @@
       </article>`;
     }
 
+    _automationText(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "object") return Object.values(value)
+        .map(item => this._automationText(item)).filter(Boolean).join(" ");
+      return String(value)
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .trim();
+    }
+
+    _automationState(value) {
+      const state = this._automationText(value);
+      if (state.toLowerCase() === "on") return this._t("automation.state_on");
+      if (state.toLowerCase() === "off") return this._t("automation.state_off");
+      return state;
+    }
+
+    _automationTarget(item) {
+      return item?.TargetName
+        || [this._automationText(item?.Domain), item?.Id].filter(value => value !== undefined && value !== "").join(" ");
+    }
+
+    _automationFallback(item) {
+      return Object.entries(item || {})
+        .filter(([key]) => !["Domain", "Id", "TargetName", "CompareTo"].includes(key))
+        .map(([key, value]) => `${this._automationText(key)} ${this._automationText(value)}`)
+        .join(", ");
+    }
+
+    _automationDetailItem(item, type) {
+      if (type === "action" && Number.isFinite(Number(item?.Wait))) {
+        return this._t("automation.wait_seconds", {seconds:Number(item.Wait)});
+      }
+      const target = this._automationTarget(item);
+      if (type === "trigger" && item?.Get === "TargetState" && item?.Comparator === "Equals") {
+        return this._t("automation.trigger_state", {
+          target,
+          value:this._automationState(item.CompareTo),
+        });
+      }
+      if (type === "action" && item?.Action === "RequestOutput") {
+        return this._t("automation.action_output", {
+          target,
+          value:this._automationState(item.Value),
+        });
+      }
+      return this._t("automation.detail_generic", {
+        target,
+        description:this._automationFallback(item),
+      });
+    }
+
+    _automationDetailsMarkup(device) {
+      const details = device?.details;
+      const triggers = Array.isArray(details?.triggers) ? details.triggers : [];
+      const actions = Array.isArray(details?.actions) ? details.actions : [];
+      if (!triggers.length && !actions.length) return "";
+      const triggerTitle = this._t(details?.trigger_mode === "Any"
+        ? "automation.when_any"
+        : "automation.when_all");
+      const list = (items, type) => items.map(item =>
+        `<li>${esc(this._automationDetailItem(item, type))}</li>`).join("");
+      return `<section class="automation-summary">
+        <div><h3>${esc(triggerTitle)}</h3><ul>${list(triggers, "trigger")}</ul></div>
+        <ha-icon icon="mdi:arrow-right"></ha-icon>
+        <div><h3>${esc(this._t("automation.then"))}</h3><ol>${list(actions, "action")}</ol></div>
+      </section>`;
+    }
+
     _deviceCard(device, category, admin) {
       const deviceId = itemId(category, device);
       const sourceEnabled = device.enabled;
@@ -751,7 +842,8 @@
           : {}),
       };
       const busy = this._busy.has(key);
-      const unchanged = !this._isDeviceDirty(key);
+      const enabledUnchanged = !this._isDeviceFieldDirty(key, "enabled");
+      const notificationUnchanged = !this._isDeviceFieldDirty(key, "notification_enabled");
       const icon = category === "smoke_alarms"
         ? "mdi:smoke-detector"
         : category === "automations" ? "mdi:robot" : "mdi:door";
@@ -763,24 +855,36 @@
       const fallbackName = category === "automations"
         ? `Automation ${deviceId}`
         : `${detail} ${deviceId}`;
-      const actions = admin ? `<div class="actions">
-        ${category === "automations" && device.deletable ? `<ha-button variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>` : ""}
-        <ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>
-      </div>` : "";
-      const controls = category === "automations" ? `
+      const deleteAction = admin && category === "automations" && device.deletable
+        ? `<ha-button variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>`
+        : "";
+      const enabledSaveAction = admin
+        ? `<ha-button data-action="save-device" data-save-field="enabled"${enabledUnchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>`
+        : "";
+      const notificationSaveAction = admin && category === "automations"
+        ? `<ha-button data-action="save-device" data-save-field="notification_enabled"${notificationUnchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>`
+        : "";
+      const actions = admin ? `<div class="actions">${enabledSaveAction}</div>` : "";
+      const controls = category === "automations" ? `${this._automationDetailsMarkup(device)}<div class="automation-controls">
           <div class="device-setting">
             <div><h3>${esc(this._t("automation.control_title"))}</h3>
               <p>${esc(this._t("automation.description"))}</p></div>
-            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy || !device.writable ? " disabled" : ""}>
-              <span>${esc(this._t("notification.enabled"))}</span></label>
+            <div class="notification-footer automation-setting-actions">
+              <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy || !device.writable ? " disabled" : ""}>
+                <span>${esc(this._t("notification.enabled"))}</span></label>
+              <div class="actions">${deleteAction}${enabledSaveAction}</div>
+            </div>
           </div>
           <div class="device-setting">
             <div><h3>${esc(this._t("automation.notification_title"))}</h3>
               <p>${esc(this._t("automation.notification_description"))}</p></div>
-            <label class="enabled device-toggle"><input data-field="notification_enabled" type="checkbox"${draft.notification_enabled ? " checked" : ""}${!admin || busy || !device.notification_writable ? " disabled" : ""}>
-              <span>${esc(this._t("notification.enabled"))}</span></label>
+            <div class="notification-footer automation-setting-actions">
+              <label class="enabled device-toggle"><input data-field="notification_enabled" type="checkbox"${draft.notification_enabled ? " checked" : ""}${!admin || busy || !device.notification_writable ? " disabled" : ""}>
+                <span>${esc(this._t("notification.enabled"))}</span></label>
+              <div class="actions">${notificationSaveAction}</div>
+            </div>
           </div>
-          <div class="notification-footer"><span></span>${actions}</div>` : `
+        </div>` : `
           <div><h3>${esc(this._t("notification.enabled"))}</h3>
             <p>${esc(this._t("device.notification_description"))}</p></div>
           <div class="notification-footer">
@@ -923,7 +1027,14 @@
         .device-controls h3 { margin:0 0 4px; font-size:16px; }
         .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
         .device-setting { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-        .device-setting + .device-setting { margin-top:14px; padding-top:14px; border-top:1px solid var(--divider-color); }
+        .automation-controls { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); align-items:stretch; gap:16px; }
+        .automation-summary { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; gap:16px; margin:0 0 16px; padding:0 0 16px; border-bottom:1px solid var(--divider-color); }
+        .automation-summary h3 { margin:0 0 6px; }
+        .automation-summary ul, .automation-summary ol { margin:0; padding-inline-start:20px; color:var(--secondary-text-color); }
+        .automation-summary li + li { margin-top:4px; }
+        .automation-summary > ha-icon { color:var(--secondary-text-color); }
+        .automation-controls .device-setting { display:grid; grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr) auto; align-items:stretch; justify-content:stretch; }
+        .automation-controls .device-setting + .device-setting { padding-inline-start:16px; border-inline-start:1px solid var(--divider-color); }
         .device-toggle { white-space:nowrap; }
         .device-controls [hidden] { display:none !important; }
         .app-managed { padding:0 17px 15px; }
@@ -952,6 +1063,7 @@
         input:disabled { opacity:.6; }
         .notification-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; min-height:40px; margin-top:10px; }
         .notification-footer .enabled { grid-column:auto; }
+        .notification-footer.automation-setting-actions { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; width:100%; box-sizing:border-box; margin-top:12px; }
         .actions { display:flex; justify-content:flex-end; gap:8px; min-height:40px; }
         .actions [hidden] { display:none !important; }
         .actions ha-circular-progress { --mdc-theme-primary:currentColor; }
@@ -982,6 +1094,10 @@
           .fields { grid-template-columns:1fr; }
           .notification-heading { min-height:124px; }
           .notification-footer { align-items:flex-end; }
+          .automation-summary { grid-template-columns:1fr; }
+          .automation-summary > ha-icon { transform:rotate(90deg); justify-self:center; }
+          .automation-controls { grid-template-columns:1fr; }
+          .automation-controls .device-setting + .device-setting { padding:14px 0 0; border-inline-start:0; border-top:1px solid var(--divider-color); }
         }
         @container (max-width:560px) {
           .equipment-heading, .device-heading { gap:9px; padding:11px 12px; }

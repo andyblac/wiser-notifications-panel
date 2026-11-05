@@ -231,6 +231,43 @@ test("loads native notifications from the selected hub", async () => {
   assert.equal(panel._drafts.get("1:over").limit, 100);
 });
 
+test("silent updates preserve unsaved automation checkbox changes", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._hubs = ["Home"];
+  panel._deviceDrafts.set("automations:12", {
+    enabled:false,
+    notification_enabled:true,
+  });
+  panel._originalDeviceDrafts.set("automations:12", {
+    enabled:true,
+    notification_enabled:false,
+  });
+  panel._hass = {
+    callWS:async () => ({
+      equipment:[], smoke_alarms:[], sensors:[],
+      automations:[{
+        automation_id:12,
+        enabled:true,
+        notification_enabled:false,
+      }],
+    }),
+  };
+
+  await panel._load(true);
+
+  assert.deepEqual(plain(panel._deviceDrafts.get("automations:12")), {
+    enabled:false,
+    notification_enabled:true,
+  });
+  assert.deepEqual(plain(panel._originalDeviceDrafts.get("automations:12")), {
+    enabled:true,
+    notification_enabled:false,
+  });
+});
+
 test("saves all three native notification settings together", async () => {
   const {Panel} = setup();
   const panel = new Panel();
@@ -284,7 +321,7 @@ test("saves a supported device notification toggle", async () => {
 
   await panel._saveDevice({
     dataset:{category:"sensors", deviceId:"8"},
-  });
+  }, "enabled");
 
   assert.deepEqual(plain(request), {
     type:"wiser/device_notification/set",
@@ -322,7 +359,7 @@ test("saves a writable automation enabled toggle", async () => {
 
   await panel._saveDevice({
     dataset:{category:"automations", deviceId:"12"},
-  });
+  }, "enabled");
 
   assert.deepEqual(plain(request), {
     type:"wiser/automation/set_enabled",
@@ -367,7 +404,7 @@ test("saves a writable automation notification toggle", async () => {
 
   await panel._saveDevice({
     dataset:{category:"automations", deviceId:"12"},
-  });
+  }, "notification_enabled");
 
   assert.deepEqual(plain(request), {
     type:"wiser/automation/set_notification_enabled",
@@ -378,6 +415,47 @@ test("saves a writable automation notification toggle", async () => {
   assert.equal(
     panel._deviceDrafts.get("automations:12").notification_enabled,
     false,
+  );
+});
+
+test("saving one automation option preserves the other unsaved option", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._deviceDrafts.set("automations:12", {
+    enabled:false,
+    notification_enabled:false,
+  });
+  panel._originalDeviceDrafts.set("automations:12", {
+    enabled:true,
+    notification_enabled:true,
+  });
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async () => ({
+      equipment:[], smoke_alarms:[], sensors:[],
+      automations:[{
+        automation_id:12,
+        enabled:false,
+        notification_enabled:true,
+      }],
+    }),
+  };
+
+  await panel._saveDevice({
+    dataset:{category:"automations", deviceId:"12"},
+  }, "enabled");
+
+  assert.equal(panel._deviceDrafts.get("automations:12").enabled, false);
+  assert.equal(
+    panel._deviceDrafts.get("automations:12").notification_enabled,
+    false,
+  );
+  assert.equal(panel._isDeviceFieldDirty("automations:12", "enabled"), false);
+  assert.equal(
+    panel._isDeviceFieldDirty("automations:12", "notification_enabled"),
+    true,
   );
 });
 
@@ -460,6 +538,28 @@ test("renders writable automations with enabled controls", () => {
       writable:true,
       notification_writable:true,
       deletable:true,
+      details:{
+        trigger_mode:"All",
+        triggers:[{
+          Domain:"SmartPlug",
+          Id:1,
+          TargetName:"Kitchen plug",
+          Get:"TargetState",
+          Comparator:"Equals",
+          CompareTo:{StringValue:"On"},
+        }],
+        actions:[
+          {Wait:1},
+          {
+            Domain:"SmartPlug",
+            Id:1,
+            TargetName:"Kitchen plug",
+            Action:"RequestOutput",
+            Value:"Off",
+          },
+        ],
+        time_constraints:[],
+      },
     }],
   };
   panel._seedDrafts();
@@ -471,9 +571,16 @@ test("renders writable automations with enabled controls", () => {
   assert.match(markup, /data-field="enabled" type="checkbox" checked/);
   assert.match(markup, /data-field="notification_enabled" type="checkbox"/);
   assert.match(markup, /Receive a notification when this automation runs\./);
+  assert.match(markup, /When all of these are true/);
+  assert.match(markup, /Kitchen plug is on/);
+  assert.match(markup, /Wait 1 s/);
+  assert.match(markup, /Turn Kitchen plug off/);
   assert.match(markup, /data-action="save-device"/);
+  assert.match(markup, /data-save-field="enabled"/);
+  assert.match(markup, /data-save-field="notification_enabled"/);
   assert.match(markup, /variant="danger" data-action="delete-automation"/);
-  assert.match(markup, /class="notification-footer">[\s\S]*data-action="delete-automation"/);
+  assert.match(markup, /class="automation-controls">[\s\S]*data-action="delete-automation"/);
+  assert.match(markup, /<h3>Automation<\/h3>[\s\S]*data-action="delete-automation"[\s\S]*<h3>Notifications<\/h3>/);
   assert.doesNotMatch(markup, /class="app-managed"/);
 });
 
