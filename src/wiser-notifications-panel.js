@@ -850,9 +850,10 @@
         .app-header h1 { margin:0; font-size:20px; font-weight:400; white-space:nowrap; }
         .icon-button { display:grid; place-items:center; width:44px; height:44px; border:0; border-radius:50%; color:inherit; background:transparent; cursor:pointer; }
         .icon-button:hover { background:rgba(127,127,127,.15); }
-        .hub-tabs { align-self:stretch; display:flex; flex:1; overflow:auto; margin-inline-start:16px; }
-        .hub-tab { padding:0 22px; border:0; border-bottom:2px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; }
+        .hub-tabs { display:flex; flex:1; align-self:stretch; min-width:0; margin-inline-start:24px; overflow-x:auto; }
+        .hub-tab { flex:0 0 auto; min-height:48px; padding:0 24px; border:0; border-bottom:2px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; }
         .hub-tab[aria-selected="true"] { color:var(--app-header-text-color, var(--primary-text-color)); border-bottom-color:currentColor; }
+        .hub-tab:focus-visible { outline:2px solid currentColor; outline-offset:-4px; }
         :host([nested]) .app-header { min-height:56px; }
         :host([nested]) .menu-button, :host([nested]) .app-header h1 { display:none; }
         :host([nested]) .hub-tabs { margin-inline-start:0; }
