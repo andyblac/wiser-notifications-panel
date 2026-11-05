@@ -10,7 +10,7 @@ function setup() {
   const context = {
     console,
     Intl,
-    window:{confirm:() => true},
+    window:{},
     document:{documentElement:{lang:"en-US"}},
     requestAnimationFrame(callback) { callback(); return 1; },
     cancelAnimationFrame() {},
@@ -231,7 +231,7 @@ test("loads native notifications from the selected hub", async () => {
   assert.equal(panel._drafts.get("1:over").limit, 100);
 });
 
-test("silent updates preserve unsaved automation checkbox changes", async () => {
+test("silent updates preserve unsaved automation status changes", async () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._renderSoon = () => {};
@@ -525,7 +525,7 @@ test("keeps the automation delete dialog open across panel refreshes", () => {
   assert.equal(panel._automationDeleteId, 12);
 });
 
-test("renders writable automations with enabled controls", () => {
+test("renders writable automations with actionable status controls", () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._notifications = {
@@ -568,20 +568,271 @@ test("renders writable automations with enabled controls", () => {
 
   assert.match(markup, /data-device-control data-category="automations" data-device-id="12"/);
   assert.match(markup, /Enable or disable this automation\./);
-  assert.match(markup, /data-field="enabled" type="checkbox" checked/);
-  assert.match(markup, /data-field="notification_enabled" type="checkbox"/);
-  assert.match(markup, /Receive a notification when this automation runs\./);
+  assert.match(markup, /data-action="toggle-enabled" data-field="enabled" aria-pressed="true"/);
+  assert.match(markup, /data-action="toggle-enabled" data-field="notification_enabled" aria-pressed="false"/);
+  assert.doesNotMatch(markup, /type="checkbox"/);
   assert.match(markup, /When all of these are true/);
   assert.match(markup, /Kitchen plug is on/);
-  assert.match(markup, /Wait 1 s/);
+  assert.match(markup, /Wait 1 min/);
   assert.match(markup, /Turn Kitchen plug off/);
-  assert.match(markup, /data-action="save-device"/);
-  assert.match(markup, /data-save-field="enabled"/);
-  assert.match(markup, /data-save-field="notification_enabled"/);
-  assert.match(markup, /variant="danger" data-action="delete-automation"/);
-  assert.match(markup, /class="automation-controls">[\s\S]*data-action="delete-automation"/);
-  assert.match(markup, /<h3>Automation<\/h3>[\s\S]*data-action="delete-automation"[\s\S]*<h3>Notifications<\/h3>/);
+  assert.doesNotMatch(markup, /data-action="save-device"/);
+  assert.match(markup, /class="status status-action danger" data-action="delete-automation"/);
+  assert.match(markup, /class="heading-actions">[\s\S]*data-field="enabled"[\s\S]*data-action="delete-automation"/);
+  assert.match(markup, /<h3>Notifications<\/h3>[\s\S]*notification-toggle-only[\s\S]*data-field="notification_enabled"/);
   assert.doesNotMatch(markup, /class="app-managed"/);
+});
+
+test("uses actionable status controls for every notification type", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[{
+      equipment_id:1,
+      name:"Smart plug",
+      monitored:true,
+      notifications:{under:{period_mins:5, limit:10, enabled:true}},
+    }],
+    smoke_alarms:[{device_id:2, name:"Smoke alarm", enabled:false}],
+    sensors:[{device_id:3, name:"Window", enabled:true}],
+    automations:[],
+  };
+  panel._seedDrafts();
+
+  const equipment = panel._categoryContent("equipment", true);
+  const smokeAlarm = panel._categoryContent("smoke_alarms", true);
+  const sensor = panel._categoryContent("sensors", true);
+
+  assert.match(equipment, /data-action="toggle-enabled" data-field="enabled" aria-pressed="true"/);
+  assert.match(smokeAlarm, /data-action="toggle-enabled" data-field="enabled" aria-pressed="false"/);
+  assert.match(sensor, /data-action="toggle-enabled" data-field="enabled" aria-pressed="true"/);
+  assert.doesNotMatch(`${equipment}${smokeAlarm}${sensor}`, /type="checkbox"/);
+});
+
+test("status controls route notification and device changes to immediate saves", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  const saves = [];
+  panel._saveNotificationEnabled = async section => { saves.push(["notification", section]); };
+  panel._saveDevice = async (section, field) => { saves.push(["device", section, field]); };
+  panel._drafts.set("1:over", {configured:true, period_mins:5, limit:100, enabled:true});
+  panel._deviceDrafts.set("sensors:8", {enabled:false});
+  const notificationSection = {dataset:{equipmentId:"1", notification:"over"}};
+  const deviceSection = {dataset:{category:"sensors", deviceId:"8"}};
+
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-notification]" ? notificationSection : null,
+  });
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-device-control]" ? deviceSection : null,
+  });
+
+  assert.equal(panel._drafts.get("1:over").enabled, false);
+  assert.equal(panel._deviceDrafts.get("sensors:8").enabled, true);
+  assert.deepEqual(saves, [
+    ["notification", notificationSection],
+    ["device", deviceSection, "enabled"],
+  ]);
+});
+
+test("equipment status toggles preserve unsaved power values", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._notifications = {equipment:[], smoke_alarms:[], sensors:[], automations:[]};
+  panel._originalDrafts.set("1:over", {
+    configured:true, period_mins:5, limit:100, enabled:true,
+  });
+  panel._drafts.set("1:over", {
+    configured:true, period_mins:7, limit:200, enabled:true,
+  });
+  let request;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      request = message;
+      return [{
+        equipment_id:1,
+        notifications:{
+          under:null,
+          over:{period_mins:5, limit:100, enabled:false},
+        },
+      }];
+    },
+  };
+  const section = {dataset:{equipmentId:"1", notification:"over"}};
+
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-notification]" ? section : null,
+  });
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/power_notification/set",
+    hub:"Home",
+    equipment_id:1,
+    notification_type:"over",
+    period_mins:5,
+    limit:100,
+    enabled:false,
+  });
+  assert.deepEqual(plain(panel._drafts.get("1:over")), {
+    configured:true,
+    period_mins:7,
+    limit:200,
+    enabled:false,
+  });
+});
+
+test("failed immediate status updates restore the confirmed state", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async () => { throw new Error("failed"); },
+  };
+  panel._originalDrafts.set("1:over", {
+    configured:true, period_mins:5, limit:100, enabled:true,
+  });
+  panel._drafts.set("1:over", {
+    configured:true, period_mins:7, limit:200, enabled:true,
+  });
+  panel._originalDeviceDrafts.set("sensors:8", {enabled:true});
+  panel._deviceDrafts.set("sensors:8", {enabled:true});
+  const notificationSection = {dataset:{equipmentId:"1", notification:"over"}};
+  const deviceSection = {dataset:{category:"sensors", deviceId:"8"}};
+
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-notification]" ? notificationSection : null,
+  });
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-device-control]" ? deviceSection : null,
+  });
+
+  assert.deepEqual(plain(panel._drafts.get("1:over")), {
+    configured:true,
+    period_mins:7,
+    limit:200,
+    enabled:true,
+  });
+  assert.equal(panel._deviceDrafts.get("sensors:8").enabled, true);
+  assert.match(panel._error, /failed/);
+});
+
+test("formats Wiser automation waits as HHMM durations", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+
+  assert.equal(panel._automationWait(1), "Wait 1 min");
+  assert.equal(panel._automationWait(100), "Wait 1 h");
+  assert.equal(panel._automationWait(103), "Wait 1 h 3 min");
+});
+
+test("automation status controls save immediately without Save buttons", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[],
+    automations:[{
+      automation_id:12,
+      name:"Test",
+      enabled:true,
+      notification_enabled:true,
+      writable:true,
+      notification_writable:true,
+      deletable:true,
+    }],
+  };
+  panel._seedDrafts();
+  const requests = [];
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      requests.push(message);
+      return {
+        equipment:[], smoke_alarms:[], sensors:[],
+        automations:[{
+          automation_id:12,
+          name:"Test",
+          enabled:false,
+          notification_enabled:message.type === "wiser/automation/set_notification_enabled"
+            ? message.enabled
+            : true,
+          writable:true,
+          notification_writable:true,
+          deletable:true,
+        }],
+      };
+    },
+  };
+  const section = {dataset:{category:"automations", deviceId:"12"}};
+
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"enabled"},
+    closest:selector => selector === "[data-device-control]" ? section : null,
+  });
+  await panel._toggleEnabled({
+    disabled:false,
+    dataset:{field:"notification_enabled"},
+    closest:selector => selector === "[data-device-control]" ? section : null,
+  });
+  const markup = panel._categoryContent("automations", true);
+
+  assert.deepEqual(plain(requests), [
+    {
+      type:"wiser/automation/set_enabled",
+      hub:"Home",
+      automation_id:12,
+      enabled:false,
+    },
+    {
+      type:"wiser/automation/set_notification_enabled",
+      hub:"Home",
+      automation_id:12,
+      enabled:false,
+    },
+  ]);
+  assert.doesNotMatch(markup, /data-action="save-device"/);
+  assert.match(markup, /data-action="delete-automation"/);
+});
+
+test("automation Delete remains in place while an enabled change is saving", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[],
+    automations:[{
+      automation_id:12,
+      name:"Test",
+      enabled:true,
+      notification_enabled:true,
+      writable:true,
+      notification_writable:true,
+      deletable:true,
+    }],
+  };
+  panel._seedDrafts();
+  panel._deviceDrafts.get("automations:12").enabled = false;
+  panel._busy.add("automations:12");
+
+  const markup = panel._categoryContent("automations", true);
+
+  assert.match(markup, /data-action="delete-automation" disabled/);
+  assert.doesNotMatch(markup, /data-action="delete-automation" hidden/);
 });
 
 test("keeps unsupported automation controls read-only", () => {
@@ -749,7 +1000,7 @@ test("tracks changed settings and keeps unchanged saves disabled", () => {
   assert.equal(panel._isDirty("1:over"), false);
 });
 
-test("changing an existing enabled toggle makes Save actionable", () => {
+test("changing an existing power value makes Save actionable", () => {
   const {Panel} = setup();
   const panel = new Panel();
   const original = {configured:true, period_mins:5, limit:100, enabled:true};
@@ -757,35 +1008,32 @@ test("changing an existing enabled toggle makes Save actionable", () => {
   panel._originalDrafts.set("1:over", {...original});
   let disabled = true;
   let hidden = true;
-  let deleteHidden = false;
   const save = {
     toggleAttribute:(name, value) => {
       if (name === "disabled") disabled = value;
-      if (name === "hidden") hidden = value;
     },
   };
-  const remove = {
+  const footer = {
     toggleAttribute:(name, value) => {
-      if (name === "hidden") deleteHidden = value;
+      if (name === "hidden") hidden = value;
     },
   };
   const section = {
     dataset:{equipmentId:"1", notification:"over"},
-    querySelector:selector => selector.includes("save") ? save : remove,
+    querySelector:selector => selector.includes("save") ? save : footer,
   };
   const input = {
-    dataset:{field:"enabled"},
-    checked:false,
+    dataset:{field:"limit"},
+    value:"250",
     closest:selector => selector === "[data-field]" ? input : section,
   };
 
   panel._input({type:"change", target:input});
 
-  assert.equal(panel._drafts.get("1:over").enabled, false);
+  assert.equal(panel._drafts.get("1:over").limit, 250);
   assert.equal(panel._isDirty("1:over"), true);
   assert.equal(disabled, false);
   assert.equal(hidden, false);
-  assert.equal(deleteHidden, true);
 });
 
 test("configured notifications use a destructive delete button", () => {
@@ -799,9 +1047,50 @@ test("configured notifications use a destructive delete button", () => {
   const markup = panel._notification({equipment_id:1}, "over", true);
 
   assert.match(markup, /data-action="delete"/);
-  assert.match(markup, /<ha-button variant="danger" data-action="delete"/);
-  assert.match(markup, /data-action="save" hidden disabled/);
-  assert.doesNotMatch(markup, /data-action="delete" hidden/);
+  assert.match(markup, /class="notification-heading-actions">[\s\S]*data-field="enabled"[\s\S]*class="status status-action danger" data-action="delete"/);
+  assert.match(markup, /class="notification-footer" hidden/);
+  assert.doesNotMatch(markup, /<ha-button variant="danger" data-action="delete"/);
+});
+
+test("opens a native Home Assistant equipment notification delete dialog", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._hass = {user:{is_admin:true}};
+  const dialog = {open:false};
+  panel.shadowRoot.querySelector = selector => selector === "#notification-delete-dialog" ? dialog : null;
+
+  panel._openNotificationDelete({dataset:{equipmentId:"1", notification:"over"}});
+
+  assert.deepEqual(plain(panel._notificationDelete), {equipmentId:1, type:"over"});
+  assert.equal(dialog.open, true);
+});
+
+test("renders native Home Assistant equipment notification delete actions", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._render();
+
+  assert.match(panel.shadowRoot.innerHTML, /<ha-dialog id="notification-delete-dialog" width="medium">/);
+  assert.match(panel.shadowRoot.innerHTML, /class="delete-confirmation">Delete this native Wiser notification\?/);
+  assert.match(panel.shadowRoot.innerHTML, /variant="danger" data-action="delete-notification-confirm">Delete/);
+});
+
+test("keeps the equipment notification delete dialog open across refreshes", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notificationDelete = {equipmentId:1, type:"under"};
+  const dialog = {
+    open:false,
+    setAttribute() {},
+    addEventListener() {},
+    querySelector() { return null; },
+  };
+  panel.shadowRoot.querySelector = selector => selector === "#notification-delete-dialog" ? dialog : null;
+
+  panel._render();
+
+  assert.equal(dialog.open, true);
+  assert.deepEqual(plain(panel._notificationDelete), {equipmentId:1, type:"under"});
 });
 
 test("deletes the selected native notification", async () => {
@@ -817,7 +1106,7 @@ test("deletes the selected native notification", async () => {
       return [];
     },
   };
-  await panel._delete({dataset:{equipmentId:"1", notification:"under"}});
+  await panel._deleteNotification(1, "under");
   assert.deepEqual(plain(request), {
     type:"wiser/power_notification/delete",
     hub:"Home",

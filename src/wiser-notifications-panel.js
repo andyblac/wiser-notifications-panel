@@ -116,6 +116,7 @@
       this._settingsError = "";
       this._savingSettings = false;
       this._automationDeleteId = null;
+      this._notificationDelete = null;
       this._draggedItem = null;
       this._renderFrame = 0;
       this._subscriptionConnection = null;
@@ -330,32 +331,16 @@
 
     _input(event) {
       const input = event.target?.closest?.("[data-field]");
-      const deviceSection = input?.closest?.("[data-device-control]");
-      if (input && deviceSection?.dataset?.category) {
-        const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
-        const draft = this._deviceDrafts.get(key);
-        if (!draft) return;
-        if (!(input.dataset.field in draft)) return;
-        draft[input.dataset.field] = input.checked;
-        const save = deviceSection.querySelector?.(`[data-action="save-device"][data-save-field="${input.dataset.field}"]`);
-        const unchanged = !this._isDeviceFieldDirty(key, input.dataset.field);
-        save?.toggleAttribute?.("hidden", unchanged);
-        save?.toggleAttribute?.("disabled", unchanged);
-        return;
-      }
       const section = input?.closest?.("[data-notification]");
       if (!input || !section) return;
       const key = this._key(Number(section.dataset.equipmentId), section.dataset.notification);
       const draft = this._drafts.get(key);
       if (!draft) return;
-      if (input.dataset.field === "enabled") draft.enabled = input.checked;
-      else draft[input.dataset.field] = Number(input.value);
+      draft[input.dataset.field] = Number(input.value);
       const save = section.querySelector?.('[data-action="save"]');
       const unchanged = draft.configured && !this._isDirty(key);
-      save?.toggleAttribute?.("hidden", unchanged);
       save?.toggleAttribute?.("disabled", unchanged);
-      const remove = section.querySelector?.('[data-action="delete"]');
-      remove?.toggleAttribute?.("hidden", draft.configured && !unchanged);
+      section.querySelector?.(".notification-footer")?.toggleAttribute?.("hidden", unchanged);
     }
 
     _notify(message) {
@@ -400,11 +385,67 @@
       }
     }
 
-    async _delete(section) {
+    async _saveNotificationEnabled(section) {
       if (!this._hass?.user?.is_admin) return;
-      if (!window.confirm(this._t("panel.confirm_delete"))) return;
       const equipmentId = Number(section.dataset.equipmentId);
       const type = section.dataset.notification;
+      const key = this._key(equipmentId, type);
+      const draft = this._drafts.get(key);
+      const original = this._originalDrafts.get(key);
+      if (!draft?.configured || !original || draft.enabled === original.enabled) return;
+      const pending = Object.fromEntries(["period_mins", "limit"]
+        .filter(field => draft[field] !== original[field])
+        .map(field => [field, draft[field]]));
+      this._busy.add(key);
+      this._error = "";
+      this._renderSoon();
+      try {
+        this._notifications.equipment = await this._hass.callWS({
+          type:"wiser/power_notification/set",
+          hub:this._hub,
+          equipment_id:equipmentId,
+          notification_type:type,
+          period_mins:original.period_mins,
+          limit:original.limit,
+          enabled:draft.enabled,
+        });
+        this._seedDrafts();
+        const refreshed = this._drafts.get(key);
+        if (refreshed) Object.assign(refreshed, pending);
+        this._notify(this._t("panel.saved"));
+      } catch (error) {
+        draft.enabled = original.enabled;
+        this._error = this._t("panel.save_error", {error:error?.message || error});
+      } finally {
+        this._busy.delete(key);
+        this._renderSoon();
+      }
+    }
+
+    _openNotificationDelete(section) {
+      if (!this._hass?.user?.is_admin) return;
+      const equipmentId = Number(section?.dataset?.equipmentId);
+      const type = section?.dataset?.notification;
+      if (!Number.isInteger(equipmentId) || !TYPES.includes(type)) return;
+      this._notificationDelete = {equipmentId, type};
+      const dialog = this.shadowRoot.querySelector?.("#notification-delete-dialog");
+      if (dialog) dialog.open = true;
+    }
+
+    _closeNotificationDelete() {
+      this._notificationDelete = null;
+      const dialog = this.shadowRoot.querySelector?.("#notification-delete-dialog");
+      if (dialog) dialog.open = false;
+    }
+
+    async _confirmNotificationDelete() {
+      const pending = this._notificationDelete;
+      this._closeNotificationDelete();
+      if (pending) await this._deleteNotification(pending.equipmentId, pending.type);
+    }
+
+    async _deleteNotification(equipmentId, type) {
+      if (!this._hass?.user?.is_admin) return;
       const key = this._key(equipmentId, type);
       this._busy.add(key);
       this._error = "";
@@ -434,6 +475,7 @@
       const draft = this._deviceDrafts.get(key);
       if (!draft || !(field in draft) || !this._isDeviceFieldDirty(key, field)) return;
       if (category !== "automations" && field !== "enabled") return;
+      const originalValue = this._originalDeviceDrafts.get(key)?.[field];
       const pending = Object.fromEntries(Object.keys(draft)
         .filter(other => other !== field && this._isDeviceFieldDirty(key, other))
         .map(other => [other, draft[other]]));
@@ -463,6 +505,7 @@
         if (refreshed) Object.assign(refreshed, pending);
         this._notify(this._t("panel.saved"));
       } catch (error) {
+        if (typeof originalValue === "boolean") draft[field] = originalValue;
         this._error = this._t("panel.save_error", {error:error?.message || error});
       } finally {
         this._busy.delete(key);
@@ -698,15 +741,38 @@
       else if (action === "settings") this._openSettings();
       else if (action === "settings-cancel") this._closeSettings();
       else if (action === "settings-save") this._saveSettings();
+      else if (action === "toggle-enabled") this._toggleEnabled(target);
       else if (action === "save") this._save(target.closest("[data-notification]"));
-      else if (action === "save-device") this._saveDevice(
-        target.closest("[data-device-control]"),
-        target.dataset.saveField || "enabled",
-      );
       else if (action === "delete-automation") this._openAutomationDelete(target.closest("[data-device-control]"));
       else if (action === "delete-automation-cancel") this._closeAutomationDelete();
       else if (action === "delete-automation-confirm") this._confirmAutomationDelete();
-      else if (action === "delete") this._delete(target.closest("[data-notification]"));
+      else if (action === "delete") this._openNotificationDelete(target.closest("[data-notification]"));
+      else if (action === "delete-notification-cancel") this._closeNotificationDelete();
+      else if (action === "delete-notification-confirm") this._confirmNotificationDelete();
+    }
+
+    _toggleEnabled(control) {
+      if (control.disabled) return;
+      const field = control.dataset.field || "enabled";
+      const deviceSection = control.closest?.("[data-device-control]");
+      if (deviceSection?.dataset?.category) {
+        const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
+        const draft = this._deviceDrafts.get(key);
+        if (!draft || !(field in draft)) return;
+        draft[field] = !draft[field];
+        return this._saveDevice(deviceSection, field);
+      }
+      const section = control.closest?.("[data-notification]");
+      if (!section) return;
+      const key = this._key(Number(section.dataset.equipmentId), section.dataset.notification);
+      const draft = this._drafts.get(key);
+      if (!draft) return;
+      draft.enabled = !draft.enabled;
+      return this._saveNotificationEnabled(section);
+    }
+
+    _enabledToggle(enabled, field = "enabled", disabled = false) {
+      return `<button type="button" class="status status-toggle${enabled ? " configured" : ""}" data-action="toggle-enabled" data-field="${field}" aria-pressed="${enabled}"${disabled ? " disabled" : ""}>${esc(this._t(enabled ? "notification.enabled" : "notification.disabled"))}</button>`;
     }
 
     _notification(equipment, type, admin) {
@@ -720,13 +786,18 @@
         ? " disabled"
         : "";
       const saveHidden = unchanged ? " hidden" : "";
-      const deleteHidden = configured && !unchanged ? " hidden" : "";
+      const statusControl = configured
+        ? this._enabledToggle(draft.enabled, "enabled", !admin || busy)
+        : `<span class="status">${esc(this._t("notification.not_configured"))}</span>`;
+      const deleteControl = configured && admin
+        ? `<button type="button" class="status status-action danger" data-action="delete"${controlsDisabled}>${esc(this._t("action.delete"))}</button>`
+        : "";
       return `<section class="notification" data-notification="${type}" data-equipment-id="${equipment.equipment_id}">
         <div class="notification-heading">
           <div class="notification-icon ${type}"><ha-icon icon="${type === "under" ? "mdi:trending-down" : "mdi:trending-up"}"></ha-icon></div>
           <div><h3>${esc(this._t(`notification.${type}`))}</h3>
             <p>${esc(this._t(`notification.${type}_description`))}</p></div>
-          <span class="status ${configured ? "configured" : ""}">${esc(this._t(configured ? "notification.configured" : "notification.not_configured"))}</span>
+          <div class="notification-heading-actions">${statusControl}${deleteControl}</div>
         </div>
         <div class="fields">
           <label><span>${esc(this._t("notification.limit"))}</span>
@@ -736,14 +807,11 @@
             <span class="number-field"><input data-field="period_mins" type="number" min="0" step="1" required value="${draft.period_mins}"${controlsDisabled}>
               <span>${esc(this._t("notification.minutes"))}</span></span></label>
         </div>
-        <div class="notification-footer">
-          <label class="enabled"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${controlsDisabled}>
-            <span>${esc(this._t("notification.enabled"))}</span></label>
-          ${admin ? `<div class="actions">
-            ${configured ? `<ha-button variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
-            <ha-button data-action="save"${saveHidden}${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
-          </div>` : ""}
-        </div>
+        ${admin ? `<div class="notification-footer"${saveHidden}>
+          <div class="actions">
+            <ha-button data-action="save"${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
+          </div>
+        </div>` : ""}
       </section>`;
     }
 
@@ -791,9 +859,20 @@
         .join(", ");
     }
 
+    _automationWait(value) {
+      const duration = Math.max(0, Math.trunc(Number(value)));
+      const hours = Math.floor(duration / 100);
+      const minutes = duration % 100;
+      if (hours && minutes) {
+        return this._t("automation.wait_hours_minutes", {hours, minutes});
+      }
+      if (hours) return this._t("automation.wait_hours", {hours});
+      return this._t("automation.wait_minutes", {minutes});
+    }
+
     _automationDetailItem(item, type) {
       if (type === "action" && Number.isFinite(Number(item?.Wait))) {
-        return this._t("automation.wait_seconds", {seconds:Number(item.Wait)});
+        return this._automationWait(item.Wait);
       }
       const target = this._automationTarget(item);
       if (type === "trigger" && item?.Get === "TargetState" && item?.Comparator === "Equals") {
@@ -842,8 +921,6 @@
           : {}),
       };
       const busy = this._busy.has(key);
-      const enabledUnchanged = !this._isDeviceFieldDirty(key, "enabled");
-      const notificationUnchanged = !this._isDeviceFieldDirty(key, "notification_enabled");
       const icon = category === "smoke_alarms"
         ? "mdi:smoke-detector"
         : category === "automations" ? "mdi:robot" : "mdi:door";
@@ -856,48 +933,30 @@
         ? `Automation ${deviceId}`
         : `${detail} ${deviceId}`;
       const deleteAction = admin && category === "automations" && device.deletable
-        ? `<ha-button variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>`
+        ? `<button type="button" class="status status-action danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</button>`
         : "";
-      const enabledSaveAction = admin
-        ? `<ha-button data-action="save-device" data-save-field="enabled"${enabledUnchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>`
-        : "";
-      const notificationSaveAction = admin && category === "automations"
-        ? `<ha-button data-action="save-device" data-save-field="notification_enabled"${notificationUnchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>`
-        : "";
-      const actions = admin ? `<div class="actions">${enabledSaveAction}</div>` : "";
+      const enabledToggleDisabled = !admin || busy || (category === "automations" && !device.writable);
+      const enabledToggle = this._enabledToggle(draft.enabled, "enabled", enabledToggleDisabled);
+      const headingActions = category === "automations"
+        ? `<div class="heading-actions">${enabledToggle}${deleteAction}</div>`
+        : `<div class="heading-actions">${enabledToggle}</div>`;
       const controls = category === "automations" ? `${this._automationDetailsMarkup(device)}<div class="automation-controls">
-          <div class="device-setting">
-            <div><h3>${esc(this._t("automation.control_title"))}</h3>
-              <p>${esc(this._t("automation.description"))}</p></div>
-            <div class="notification-footer automation-setting-actions">
-              <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy || !device.writable ? " disabled" : ""}>
-                <span>${esc(this._t("notification.enabled"))}</span></label>
-              <div class="actions">${deleteAction}${enabledSaveAction}</div>
-            </div>
-          </div>
           <div class="device-setting">
             <div><h3>${esc(this._t("automation.notification_title"))}</h3>
               <p>${esc(this._t("automation.notification_description"))}</p></div>
-            <div class="notification-footer automation-setting-actions">
-              <label class="enabled device-toggle"><input data-field="notification_enabled" type="checkbox"${draft.notification_enabled ? " checked" : ""}${!admin || busy || !device.notification_writable ? " disabled" : ""}>
-                <span>${esc(this._t("notification.enabled"))}</span></label>
-              <div class="actions">${notificationSaveAction}</div>
+            <div class="notification-footer notification-toggle-only">
+              ${this._enabledToggle(draft.notification_enabled, "notification_enabled", !admin || busy || !device.notification_writable)}
             </div>
           </div>
         </div>` : `
           <div><h3>${esc(this._t("notification.enabled"))}</h3>
-            <p>${esc(this._t("device.notification_description"))}</p></div>
-          <div class="notification-footer">
-            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
-              <span>${esc(this._t("notification.enabled"))}</span></label>
-            ${actions}
-          </div>`;
+            <p>${esc(this._t("device.notification_description"))}</p></div>`;
       return `<article class="device-card" data-device-control data-category="${category}" data-device-id="${deviceId}">
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
           <div><h2>${esc(device.name || fallbackName)}</h2>
             <p>${esc(detail)}</p></div>
-          <span class="status configured">${esc(this._t(draft.enabled ? "notification.enabled" : "notification.disabled"))}</span>
+          ${headingActions}
         </div>
         <div class="device-controls">
           ${controls}
@@ -1022,20 +1081,18 @@
         .device-heading { display:flex; align-items:center; gap:12px; padding:15px 17px; }
         .device-heading h2 { margin:0; font-size:18px; }
         .device-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
-        .device-heading .status { margin-inline-start:auto; }
+        .heading-actions { display:grid; justify-items:end; gap:6px; margin-inline-start:auto; }
+        .heading-actions .status { grid-column:auto; justify-self:end; }
         .device-controls { padding:14px 17px; border-top:1px solid var(--divider-color); }
         .device-controls h3 { margin:0 0 4px; font-size:16px; }
         .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
-        .device-setting { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-        .automation-controls { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); align-items:stretch; gap:16px; }
-        .automation-summary { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; gap:16px; margin:0 0 16px; padding:0 0 16px; border-bottom:1px solid var(--divider-color); }
+        .automation-controls { display:grid; grid-template-columns:minmax(0, 1fr); }
+        .automation-summary { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:start; gap:16px; margin:0 0 16px; padding:0 0 16px; border-bottom:1px solid var(--divider-color); }
         .automation-summary h3 { margin:0 0 6px; }
         .automation-summary ul, .automation-summary ol { margin:0; padding-inline-start:20px; color:var(--secondary-text-color); }
         .automation-summary li + li { margin-top:4px; }
         .automation-summary > ha-icon { color:var(--secondary-text-color); }
-        .automation-controls .device-setting { display:grid; grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr) auto; align-items:stretch; justify-content:stretch; }
-        .automation-controls .device-setting + .device-setting { padding-inline-start:16px; border-inline-start:1px solid var(--divider-color); }
-        .device-toggle { white-space:nowrap; }
+        .automation-controls .device-setting { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:start; gap:16px; }
         .device-controls [hidden] { display:none !important; }
         .app-managed { padding:0 17px 15px; }
         .equipment-icon, .notification-icon { display:grid; place-items:center; flex:0 0 auto; border-radius:14px; color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 12%, transparent); }
@@ -1050,20 +1107,26 @@
         .notification-heading { display:grid; grid-template-columns:auto minmax(0, 1fr); align-items:start; gap:10px; min-height:78px; }
         .notification-heading h3 { margin:0 0 4px; font-size:16px; }
         .notification-heading p { margin:0; color:var(--secondary-text-color); font-size:13px; line-height:1.45; }
-        .status { grid-column:2; justify-self:start; padding:4px 8px; border-radius:999px; color:var(--secondary-text-color); background:var(--secondary-background-color); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+        .notification-heading-actions { grid-column:2; display:flex; align-items:center; justify-self:start; gap:6px; }
+        .notification-heading-actions .status { grid-column:auto; }
+        .status { grid-column:2; justify-self:start; padding:4px 8px; border:0; border-radius:999px; color:var(--secondary-text-color); background:var(--secondary-background-color); font-family:inherit; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
         .status.configured { color:var(--success-color, #43a047); background:color-mix(in srgb, currentColor 12%, transparent); }
+        .status-toggle:not(:disabled) { cursor:pointer; }
+        .status-action:not(:disabled) { cursor:pointer; }
+        .status-action.danger { color:var(--error-color, #db4437); background:color-mix(in srgb, currentColor 12%, transparent); }
+        .status-toggle:focus-visible { outline:2px solid var(--primary-color); outline-offset:2px; }
+        .status-action:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+        .status-toggle:disabled { cursor:default; }
         .fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
         .fields label { display:grid; gap:7px; color:var(--secondary-text-color); font-size:13px; }
         .number-field { display:flex; align-items:center; overflow:hidden; min-height:40px; border:1px solid var(--divider-color); border-radius:10px; background:var(--primary-background-color); }
         .number-field:focus-within { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
         .number-field input { width:100%; min-width:0; padding:8px 10px; border:0; outline:0; color:var(--primary-text-color); background:transparent; font:inherit; font-size:15px; }
         .number-field > span { padding:0 10px; color:var(--secondary-text-color); white-space:nowrap; }
-        .enabled { grid-column:1 / -1; display:flex !important; align-items:center; gap:9px !important; min-height:34px; color:var(--primary-text-color) !important; }
-        .enabled input { width:19px; height:19px; margin:0; accent-color:var(--primary-color); }
         input:disabled { opacity:.6; }
         .notification-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; min-height:40px; margin-top:10px; }
-        .notification-footer .enabled { grid-column:auto; }
-        .notification-footer.automation-setting-actions { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; width:100%; box-sizing:border-box; margin-top:12px; }
+        .notification-footer > .actions { margin-inline-start:auto; }
+        .notification-footer.notification-toggle-only { align-self:start; justify-content:flex-end; width:auto; margin-top:0; }
         .actions { display:flex; justify-content:flex-end; gap:8px; min-height:40px; }
         .actions [hidden] { display:none !important; }
         .actions ha-circular-progress { --mdc-theme-primary:currentColor; }
@@ -1096,8 +1159,6 @@
           .notification-footer { align-items:flex-end; }
           .automation-summary { grid-template-columns:1fr; }
           .automation-summary > ha-icon { transform:rotate(90deg); justify-self:center; }
-          .automation-controls { grid-template-columns:1fr; }
-          .automation-controls .device-setting + .device-setting { padding:14px 0 0; border-inline-start:0; border-top:1px solid var(--divider-color); }
         }
         @container (max-width:560px) {
           .equipment-heading, .device-heading { gap:9px; padding:11px 12px; }
@@ -1117,8 +1178,6 @@
           .number-field input { padding:6px 8px; font-size:14px; }
           .number-field > span { padding:0 7px; font-size:11px; }
           .notification-footer { min-height:36px; margin-top:7px; }
-          .enabled { gap:6px !important; min-height:30px; font-size:12px; }
-          .enabled input { width:17px; height:17px; }
           .actions { min-height:36px; }
           .device-controls { gap:9px; padding:11px 12px; }
           .device-controls h3 { font-size:14px; }
@@ -1140,7 +1199,6 @@
           .monitoring { display:none; }
           .notification { padding:18px; }
           .fields { grid-template-columns:1fr; }
-          .enabled { grid-column:1; }
         }
       </style>`;
     }
@@ -1196,6 +1254,13 @@
             <ha-button appearance="plain" data-action="delete-automation-cancel">${esc(this._t("action.cancel"))}</ha-button>
             <ha-button variant="danger" data-action="delete-automation-confirm">${esc(this._t("action.delete"))}</ha-button>
           </div>
+        </ha-dialog>
+        <ha-dialog id="notification-delete-dialog" width="medium">
+          <p class="delete-confirmation">${esc(this._t("panel.confirm_delete"))}</p>
+          <div class="settings-actions" id="notification-delete-actions" slot="footer">
+            <ha-button appearance="plain" data-action="delete-notification-cancel">${esc(this._t("action.cancel"))}</ha-button>
+            <ha-button variant="danger" data-action="delete-notification-confirm">${esc(this._t("action.delete"))}</ha-button>
+          </div>
         </ha-dialog>`;
       const automationDeleteDialog = this.shadowRoot.querySelector?.("#automation-delete-dialog");
       if (automationDeleteDialog) {
@@ -1209,6 +1274,19 @@
         automationDeleteDialog.addEventListener?.("closed", () => this._closeAutomationDelete(), {once:true});
         automationDeleteDialog.addEventListener?.("close-dialog", () => this._closeAutomationDelete(), {once:true});
         if (Number.isInteger(this._automationDeleteId)) automationDeleteDialog.open = true;
+      }
+      const notificationDeleteDialog = this.shadowRoot.querySelector?.("#notification-delete-dialog");
+      if (notificationDeleteDialog) {
+        const heading = this._t("panel.delete_title");
+        notificationDeleteDialog.setAttribute?.("aria-label", heading);
+        notificationDeleteDialog.setAttribute?.("header-title", heading);
+        notificationDeleteDialog.heading = heading;
+        if (!("headerTitle" in (customElements.get("ha-dialog")?.prototype || {}))) {
+          notificationDeleteDialog.querySelector?.("#notification-delete-actions")?.removeAttribute("slot");
+        }
+        notificationDeleteDialog.addEventListener?.("closed", () => this._closeNotificationDelete(), {once:true});
+        notificationDeleteDialog.addEventListener?.("close-dialog", () => this._closeNotificationDelete(), {once:true});
+        if (this._notificationDelete) notificationDeleteDialog.open = true;
       }
       if (this._settingsOpen) {
         const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
