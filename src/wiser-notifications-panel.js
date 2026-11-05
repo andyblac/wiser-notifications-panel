@@ -194,10 +194,7 @@
       for (const category of ["smoke_alarms", "sensors", "automations"]) {
         for (const device of this._notifications[category]) {
           const key = `${category}:${itemId(category, device)}`;
-          const enabled = category === "automations"
-            ? device.notification_enabled
-            : device.enabled;
-          const draft = {enabled:Boolean(enabled)};
+          const draft = {enabled:Boolean(device.enabled)};
           deviceDrafts.set(key, draft);
           originalDeviceDrafts.set(key, {...draft});
         }
@@ -262,7 +259,7 @@
 
     _input(event) {
       const input = event.target?.closest?.("[data-field]");
-      const deviceSection = input?.closest?.("[data-device-notification]");
+      const deviceSection = input?.closest?.("[data-device-control]");
       if (input && deviceSection?.dataset?.category) {
         const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
         const draft = this._deviceDrafts.get(key);
@@ -370,7 +367,7 @@
       try {
         const message = category === "automations"
           ? {
-              type:"wiser/automation_notification/set",
+              type:"wiser/automation/set_enabled",
               hub:this._hub,
               automation_id:deviceId,
               enabled:draft.enabled,
@@ -579,7 +576,7 @@
       else if (action === "settings-cancel") this._closeSettings();
       else if (action === "settings-save") this._saveSettings();
       else if (action === "save") this._save(target.closest("[data-notification]"));
-      else if (action === "save-device") this._saveDevice(target.closest("[data-device-notification]"));
+      else if (action === "save-device") this._saveDevice(target.closest("[data-device-control]"));
       else if (action === "delete") this._delete(target.closest("[data-notification]"));
     }
 
@@ -638,9 +635,7 @@
 
     _deviceCard(device, category, admin) {
       const deviceId = itemId(category, device);
-      const sourceEnabled = category === "automations"
-        ? device.notification_enabled
-        : device.enabled;
+      const sourceEnabled = device.enabled;
       const key = `${category}:${deviceId}`;
       const draft = this._deviceDrafts.get(key) || {enabled:Boolean(sourceEnabled)};
       const busy = this._busy.has(key);
@@ -651,12 +646,12 @@
       const detail = category === "smoke_alarms"
         ? device.device_type
         : category === "automations"
-          ? this._t("automation.notification_description")
+          ? this._t("automation.description")
           : [device.sensor_type, device.device_type].filter(Boolean).join(" · ");
       const fallbackName = category === "automations"
         ? `Automation ${deviceId}`
         : `${detail} ${deviceId}`;
-      return `<article class="device-card" data-device-notification data-category="${category}" data-device-id="${deviceId}">
+      return `<article class="device-card" data-device-control data-category="${category}" data-device-id="${deviceId}">
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
           <div><h2>${esc(device.name || fallbackName)}</h2>
@@ -665,7 +660,7 @@
         </div>
         <div class="device-controls">
           <div><h3>${esc(this._t("notification.enabled"))}</h3>
-            <p>${esc(this._t("device.notification_description"))}</p></div>
+            <p>${esc(this._t(category === "automations" ? "automation.description" : "device.notification_description"))}</p></div>
           <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
             <span>${esc(this._t("notification.enabled"))}</span></label>
           ${admin ? `<ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>` : ""}
@@ -678,10 +673,10 @@
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="mdi:robot"></ha-icon></div>
           <div><h2>${esc(automation.name || `Automation ${automation.automation_id}`)}</h2>
-            <p>${esc(this._t("automation.notification_description"))}</p></div>
-          <span class="status ${automation.notification_enabled ? "configured" : ""}">${esc(this._t(automation.notification_enabled ? "notification.enabled" : "notification.disabled"))}</span>
+            <p>${esc(this._t("automation.description"))}</p></div>
+          <span class="status ${automation.enabled ? "configured" : ""}">${esc(this._t(automation.enabled ? "notification.enabled" : "notification.disabled"))}</span>
         </div>
-        <p class="app-managed">${esc(this._t("automation.app_managed"))}</p>
+        <p class="app-managed">${esc(this._t("automation.unavailable"))}</p>
       </article>`;
     }
 
@@ -915,6 +910,9 @@
         ${hubs.map(hub => `<button class="hub-tab" data-action="hub" data-hub="${esc(hub)}" role="tab" aria-selected="${hub === this._hub}">${esc(hub)}</button>`).join("")}
       </nav>` : `<div class="hub-tabs"></div>`;
       const headerClass = `app-header${hubs.length <= 1 ? " single-hub" : ""}${canConfigure ? " has-settings" : ""}`;
+      const automationCategory = this._category === "automations";
+      const pageTitle = this._t(automationCategory ? "panel.automations_title" : "panel.title");
+      const pageSubtitle = this._t(automationCategory ? "panel.automations_subtitle" : "panel.subtitle");
       let content;
       if (this._loading) content = `<p class="message" role="status">${esc(this._t("panel.loading"))}</p>`;
       else if (this._error) content = `<div class="message error" role="alert">${esc(this._error)}<br><ha-button data-action="retry">${esc(this._t("panel.retry"))}</ha-button></div>`;
@@ -932,11 +930,11 @@
       this.shadowRoot.innerHTML = `${this._style()}
         <header class="${headerClass}">
           <button class="icon-button menu-button" data-action="menu" aria-label="${esc(this._t("panel.menu"))}"><ha-icon icon="mdi:menu"></ha-icon></button>
-          <h1>${esc(this._t("panel.title"))}</h1>${tabs}
+          <h1>${esc(pageTitle)}</h1>${tabs}
           ${canConfigure ? `<ha-button class="header-settings" appearance="plain" data-action="settings" aria-label="${esc(this._t("panel.settings"))}" title="${esc(this._t("panel.settings"))}"><ha-icon icon="mdi:cog"></ha-icon></ha-button>` : ""}
         </header>
         <main>
-          <div class="hero"><div><h2>${esc(this._t("panel.title"))}</h2><p>${esc(this._t("panel.subtitle"))}</p></div>
+          <div class="hero"><div><h2>${esc(pageTitle)}</h2><p>${esc(pageSubtitle)}</p></div>
             <ha-button class="refresh" appearance="plain" data-action="refresh"><ha-icon icon="mdi:refresh"></ha-icon><span>${esc(this._t("panel.refresh"))}</span></ha-button></div>
           <div aria-live="polite">${content}</div>
         </main>

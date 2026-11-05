@@ -48,6 +48,20 @@ test("registers the Wiser Notifications panel", () => {
   assert.equal(typeof Panel.prototype._openEditor, "function");
 });
 
+test("uses an automation heading only for the automations category", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._hass = {locale:{language:"en-GB"}, user:{is_admin:true}};
+
+  panel._category = "automations";
+  panel._render();
+  assert.match(panel.shadowRoot.innerHTML, /<h2>Automations<\/h2><p>Automations stored on your Wiser hub<\/p>/);
+
+  panel._category = "equipment";
+  panel._render();
+  assert.match(panel.shadowRoot.innerHTML, /<h2>Notifications<\/h2><p>Native alerts stored on your Wiser hub<\/p>/);
+});
+
 test("routine Home Assistant updates do not rebuild an active form", () => {
   const {Panel} = setup();
   const panel = new Panel();
@@ -150,9 +164,9 @@ test("localizes supported languages and falls back to English", () => {
   assert.equal(helpers.languageFor({language:"nb-NO"}), "nb");
   assert.equal(helpers.languageFor({language:"no-NO"}), "nb");
   assert.equal(helpers.languageFor({language:"pt-BR"}), "pt");
-  assert.equal(helpers.localize("panel.title", {language:"de"}), "Wiser-Benachrichtigungen");
-  assert.equal(helpers.localize("panel.title", {language:"es"}), "Notificaciones Wiser");
-  assert.equal(helpers.localize("panel.title", {language:"it"}), "Wiser Notifications");
+  assert.equal(helpers.localize("panel.title", {language:"de"}), "Benachrichtigungen");
+  assert.equal(helpers.localize("panel.title", {language:"es"}), "Notificaciones");
+  assert.equal(helpers.localize("panel.title", {language:"it"}), "Notifications");
 });
 
 test("keeps translation keys and placeholders aligned", () => {
@@ -255,7 +269,7 @@ test("saves a supported device notification toggle", async () => {
   assert.equal(panel._deviceDrafts.get("sensors:8").enabled, false);
 });
 
-test("saves a writable automation notification toggle", async () => {
+test("saves a writable automation enabled toggle", async () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._renderSoon = () => {};
@@ -272,7 +286,7 @@ test("saves a writable automation notification toggle", async () => {
         automations:[{
           automation_id:12,
           name:"Door left open",
-          notification_enabled:false,
+          enabled:false,
           writable:true,
         }],
       };
@@ -284,7 +298,7 @@ test("saves a writable automation notification toggle", async () => {
   });
 
   assert.deepEqual(plain(request), {
-    type:"wiser/automation_notification/set",
+    type:"wiser/automation/set_enabled",
     hub:"Home",
     automation_id:12,
     enabled:false,
@@ -292,7 +306,7 @@ test("saves a writable automation notification toggle", async () => {
   assert.equal(panel._deviceDrafts.get("automations:12").enabled, false);
 });
 
-test("renders writable automations with notification controls", () => {
+test("renders writable automations with enabled controls", () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._notifications = {
@@ -300,7 +314,7 @@ test("renders writable automations with notification controls", () => {
     automations:[{
       automation_id:12,
       name:"Door left open",
-      notification_enabled:true,
+      enabled:true,
       writable:true,
     }],
   };
@@ -308,13 +322,14 @@ test("renders writable automations with notification controls", () => {
 
   const markup = panel._categoryContent("automations", true);
 
-  assert.match(markup, /data-device-notification data-category="automations" data-device-id="12"/);
+  assert.match(markup, /data-device-control data-category="automations" data-device-id="12"/);
+  assert.match(markup, /Enable or disable this automation\./);
   assert.match(markup, /data-field="enabled" type="checkbox" checked/);
   assert.match(markup, /data-action="save-device"/);
   assert.doesNotMatch(markup, /class="app-managed"/);
 });
 
-test("keeps unsupported automation notifications read-only", () => {
+test("keeps unsupported automation controls read-only", () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._notifications = {
@@ -322,7 +337,7 @@ test("keeps unsupported automation notifications read-only", () => {
     automations:[{
       automation_id:12,
       name:"Door left open",
-      notification_enabled:true,
+      enabled:true,
       writable:false,
     }],
   };
