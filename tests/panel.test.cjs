@@ -86,6 +86,33 @@ test("routine Home Assistant updates do not rebuild an active form", () => {
   assert.equal(renders, 1);
 });
 
+test("reloads the selected hub when the integration reports an update", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._hub = "Home";
+  const loads = [];
+  let callback;
+  let unsubscribed = false;
+  const connection = {
+    async subscribeMessage(handler, message) {
+      callback = handler;
+      assert.deepEqual(plain(message), {type:"wiser_updated"});
+      return () => { unsubscribed = true; };
+    },
+  };
+  panel._hass = {connection};
+  panel._load = silent => { loads.push(silent); };
+
+  await panel._subscribeUpdates();
+  callback({hub:"Other"});
+  assert.deepEqual(loads, []);
+  callback({hub:"Home"});
+  assert.deepEqual(loads, [true]);
+
+  panel.disconnectedCallback();
+  assert.equal(unsubscribed, true);
+});
+
 test("notification defaults preserve configured zero values", () => {
   const {helpers} = setup();
   assert.deepEqual(

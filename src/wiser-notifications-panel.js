@@ -117,6 +117,9 @@
       this._savingSettings = false;
       this._draggedItem = null;
       this._renderFrame = 0;
+      this._subscriptionConnection = null;
+      this._unsubscribeUpdates = null;
+      this._subscriptionGeneration = 0;
       this.shadowRoot.addEventListener("click", event => this._click(event));
       this.shadowRoot.addEventListener("input", event => this._input(event));
       this.shadowRoot.addEventListener("change", event => this._input(event));
@@ -133,7 +136,10 @@
       const adminChanged = !first
         && Boolean(this._hass?.user?.is_admin) !== Boolean(value?.user?.is_admin);
       this._hass = value;
-      if ((first || connectionChanged) && this.isConnected) this._load();
+      if ((first || connectionChanged) && this.isConnected) {
+        this._subscribeUpdates();
+        this._load();
+      }
       else if (languageChanged || adminChanged) this._renderSoon();
     }
 
@@ -160,12 +166,49 @@
 
     connectedCallback() {
       this._renderSoon();
-      if (this._hass) this._load();
+      if (this._hass) {
+        this._subscribeUpdates();
+        this._load();
+      }
     }
 
     disconnectedCallback() {
+      this._unsubscribeFromUpdates();
       if (this._renderFrame) cancelAnimationFrame(this._renderFrame);
       this._renderFrame = 0;
+    }
+
+    _unsubscribeFromUpdates() {
+      this._subscriptionGeneration += 1;
+      this._unsubscribeUpdates?.();
+      this._unsubscribeUpdates = null;
+      this._subscriptionConnection = null;
+    }
+
+    async _subscribeUpdates() {
+      const connection = this._hass?.connection;
+      if (!this.isConnected || !connection?.subscribeMessage) return;
+      if (this._subscriptionConnection === connection) return;
+      this._unsubscribeFromUpdates();
+      this._subscriptionConnection = connection;
+      const generation = this._subscriptionGeneration;
+      try {
+        const unsubscribe = await connection.subscribeMessage(event => {
+          const hub = event?.hub ?? event?.event?.hub;
+          if (!hub || !this._hub || hub === this._hub) this._load(true);
+        }, {type:"wiser_updated"});
+        if (generation !== this._subscriptionGeneration
+          || connection !== this._hass?.connection
+          || !this.isConnected) {
+          unsubscribe?.();
+          return;
+        }
+        this._unsubscribeUpdates = unsubscribe;
+      } catch (_error) {
+        if (generation === this._subscriptionGeneration) {
+          this._subscriptionConnection = null;
+        }
+      }
     }
 
     _t(key, values) {
