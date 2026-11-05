@@ -239,6 +239,9 @@
         for (const device of this._notifications[category]) {
           const key = `${category}:${itemId(category, device)}`;
           const draft = {enabled:Boolean(device.enabled)};
+          if (category === "automations") {
+            draft.notification_enabled = Boolean(device.notification_enabled);
+          }
           deviceDrafts.set(key, draft);
           originalDeviceDrafts.set(key, {...draft});
         }
@@ -256,8 +259,10 @@
     }
 
     _isDeviceDirty(key) {
-      return this._deviceDrafts.get(key)?.enabled
-        !== this._originalDeviceDrafts.get(key)?.enabled;
+      const draft = this._deviceDrafts.get(key);
+      const original = this._originalDeviceDrafts.get(key);
+      if (!draft || !original) return Boolean(draft);
+      return Object.keys(draft).some(field => draft[field] !== original[field]);
     }
 
     async _load(silent = false) {
@@ -308,7 +313,8 @@
         const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
         const draft = this._deviceDrafts.get(key);
         if (!draft) return;
-        draft.enabled = input.checked;
+        if (!(input.dataset.field in draft)) return;
+        draft[input.dataset.field] = input.checked;
         const save = deviceSection.querySelector?.('[data-action="save-device"]');
         const unchanged = !this._isDeviceDirty(key);
         save?.toggleAttribute?.("hidden", unchanged);
@@ -409,21 +415,32 @@
       this._error = "";
       this._renderSoon();
       try {
-        const message = category === "automations"
-          ? {
-              type:"wiser/automation/set_enabled",
-              hub:this._hub,
-              automation_id:deviceId,
-              enabled:draft.enabled,
-            }
-          : {
+        const original = this._originalDeviceDrafts.get(key) || {};
+        const messages = category === "automations"
+          ? [
+              draft.enabled !== original.enabled ? {
+                type:"wiser/automation/set_enabled",
+                hub:this._hub,
+                automation_id:deviceId,
+                enabled:draft.enabled,
+              } : null,
+              draft.notification_enabled !== original.notification_enabled ? {
+                type:"wiser/automation/set_notification_enabled",
+                hub:this._hub,
+                automation_id:deviceId,
+                enabled:draft.notification_enabled,
+              } : null,
+            ].filter(Boolean)
+          : [{
               type:"wiser/device_notification/set",
               hub:this._hub,
               category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
               device_id:deviceId,
               enabled:draft.enabled,
-            };
-        this._notifications = await this._hass.callWS(message);
+            }];
+        for (const message of messages) {
+          this._notifications = await this._hass.callWS(message);
+        }
         this._seedDrafts();
         this._notify(this._t("panel.saved"));
       } catch (error) {
@@ -727,7 +744,12 @@
       const deviceId = itemId(category, device);
       const sourceEnabled = device.enabled;
       const key = `${category}:${deviceId}`;
-      const draft = this._deviceDrafts.get(key) || {enabled:Boolean(sourceEnabled)};
+      const draft = this._deviceDrafts.get(key) || {
+        enabled:Boolean(sourceEnabled),
+        ...(category === "automations"
+          ? {notification_enabled:Boolean(device.notification_enabled)}
+          : {}),
+      };
       const busy = this._busy.has(key);
       const unchanged = !this._isDeviceDirty(key);
       const icon = category === "smoke_alarms"
@@ -745,6 +767,27 @@
         ${category === "automations" && device.deletable ? `<ha-button variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>` : ""}
         <ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>
       </div>` : "";
+      const controls = category === "automations" ? `
+          <div class="device-setting">
+            <div><h3>${esc(this._t("automation.control_title"))}</h3>
+              <p>${esc(this._t("automation.description"))}</p></div>
+            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy || !device.writable ? " disabled" : ""}>
+              <span>${esc(this._t("notification.enabled"))}</span></label>
+          </div>
+          <div class="device-setting">
+            <div><h3>${esc(this._t("automation.notification_title"))}</h3>
+              <p>${esc(this._t("automation.notification_description"))}</p></div>
+            <label class="enabled device-toggle"><input data-field="notification_enabled" type="checkbox"${draft.notification_enabled ? " checked" : ""}${!admin || busy || !device.notification_writable ? " disabled" : ""}>
+              <span>${esc(this._t("notification.enabled"))}</span></label>
+          </div>
+          <div class="notification-footer"><span></span>${actions}</div>` : `
+          <div><h3>${esc(this._t("notification.enabled"))}</h3>
+            <p>${esc(this._t("device.notification_description"))}</p></div>
+          <div class="notification-footer">
+            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
+              <span>${esc(this._t("notification.enabled"))}</span></label>
+            ${actions}
+          </div>`;
       return `<article class="device-card" data-device-control data-category="${category}" data-device-id="${deviceId}">
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
@@ -753,13 +796,7 @@
           <span class="status configured">${esc(this._t(draft.enabled ? "notification.enabled" : "notification.disabled"))}</span>
         </div>
         <div class="device-controls">
-          <div><h3>${esc(this._t("notification.enabled"))}</h3>
-            <p>${esc(this._t(category === "automations" ? "automation.description" : "device.notification_description"))}</p></div>
-          <div class="notification-footer">
-            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
-              <span>${esc(this._t("notification.enabled"))}</span></label>
-            ${actions}
-          </div>
+          ${controls}
         </div>
       </article>`;
     }
@@ -783,7 +820,7 @@
       }
       if (category === "automations") {
         return this._categoryItems(category)
-          .map(item => item.writable
+          .map(item => item.writable || item.notification_writable || item.deletable
             ? this._deviceCard(item, category, admin)
             : this._automationCard(item))
           .join("");
@@ -885,6 +922,8 @@
         .device-controls { padding:14px 17px; border-top:1px solid var(--divider-color); }
         .device-controls h3 { margin:0 0 4px; font-size:16px; }
         .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
+        .device-setting { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+        .device-setting + .device-setting { margin-top:14px; padding-top:14px; border-top:1px solid var(--divider-color); }
         .device-toggle { white-space:nowrap; }
         .device-controls [hidden] { display:none !important; }
         .app-managed { padding:0 17px 15px; }

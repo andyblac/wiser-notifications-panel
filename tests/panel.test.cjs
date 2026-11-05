@@ -333,6 +333,54 @@ test("saves a writable automation enabled toggle", async () => {
   assert.equal(panel._deviceDrafts.get("automations:12").enabled, false);
 });
 
+test("saves a writable automation notification toggle", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._deviceDrafts.set("automations:12", {
+    enabled:true,
+    notification_enabled:false,
+  });
+  panel._originalDeviceDrafts.set("automations:12", {
+    enabled:true,
+    notification_enabled:true,
+  });
+  let request;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      request = message;
+      return {
+        equipment:[], smoke_alarms:[], sensors:[],
+        automations:[{
+          automation_id:12,
+          name:"Door left open",
+          enabled:true,
+          notification_enabled:false,
+          writable:true,
+          notification_writable:true,
+        }],
+      };
+    },
+  };
+
+  await panel._saveDevice({
+    dataset:{category:"automations", deviceId:"12"},
+  });
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/automation/set_notification_enabled",
+    hub:"Home",
+    automation_id:12,
+    enabled:false,
+  });
+  assert.equal(
+    panel._deviceDrafts.get("automations:12").notification_enabled,
+    false,
+  );
+});
+
 test("deletes a Wiser automation", async () => {
   const {Panel} = setup();
   const panel = new Panel();
@@ -408,7 +456,9 @@ test("renders writable automations with enabled controls", () => {
       automation_id:12,
       name:"Door left open",
       enabled:true,
+      notification_enabled:false,
       writable:true,
+      notification_writable:true,
       deletable:true,
     }],
   };
@@ -419,6 +469,8 @@ test("renders writable automations with enabled controls", () => {
   assert.match(markup, /data-device-control data-category="automations" data-device-id="12"/);
   assert.match(markup, /Enable or disable this automation\./);
   assert.match(markup, /data-field="enabled" type="checkbox" checked/);
+  assert.match(markup, /data-field="notification_enabled" type="checkbox"/);
+  assert.match(markup, /Receive a notification when this automation runs\./);
   assert.match(markup, /data-action="save-device"/);
   assert.match(markup, /variant="danger" data-action="delete-automation"/);
   assert.match(markup, /class="notification-footer">[\s\S]*data-action="delete-automation"/);
