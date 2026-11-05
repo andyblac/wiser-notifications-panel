@@ -55,6 +55,14 @@
     });
   }
 
+  function localizedCategories(notifications, hass) {
+    const collator = new Intl.Collator(languageFor(hass), {sensitivity:"base"});
+    return availableCategories(notifications).sort((left, right) => collator.compare(
+      localize(`category.${left}`, hass),
+      localize(`category.${right}`, hass),
+    ));
+  }
+
   function deviceColumns(value) {
     const columns = Number(value);
     return [1, 2, 3, 4].includes(columns) ? columns : 2;
@@ -183,10 +191,13 @@
       this._originalDrafts = originals;
       const deviceDrafts = new Map();
       const originalDeviceDrafts = new Map();
-      for (const category of ["smoke_alarms", "sensors"]) {
+      for (const category of ["smoke_alarms", "sensors", "automations"]) {
         for (const device of this._notifications[category]) {
-          const key = `${category}:${device.device_id}`;
-          const draft = {enabled:Boolean(device.enabled)};
+          const key = `${category}:${itemId(category, device)}`;
+          const enabled = category === "automations"
+            ? device.notification_enabled
+            : device.enabled;
+          const draft = {enabled:Boolean(enabled)};
           deviceDrafts.set(key, draft);
           originalDeviceDrafts.set(key, {...draft});
         }
@@ -228,7 +239,7 @@
         for (const category of CATEGORY_ORDER) {
           if (!Array.isArray(this._notifications?.[category])) this._notifications[category] = [];
         }
-        const categories = availableCategories(this._notifications);
+        const categories = localizedCategories(this._notifications, this._hass);
         if (!categories.includes(this._category)) this._category = categories[0] || "equipment";
         this._seedDrafts();
         this._error = "";
@@ -357,13 +368,21 @@
       this._error = "";
       this._renderSoon();
       try {
-        this._notifications = await this._hass.callWS({
-          type:"wiser/device_notification/set",
-          hub:this._hub,
-          category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
-          device_id:deviceId,
-          enabled:draft.enabled,
-        });
+        const message = category === "automations"
+          ? {
+              type:"wiser/automation_notification/set",
+              hub:this._hub,
+              automation_id:deviceId,
+              enabled:draft.enabled,
+            }
+          : {
+              type:"wiser/device_notification/set",
+              hub:this._hub,
+              category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
+              device_id:deviceId,
+              enabled:draft.enabled,
+            };
+        this._notifications = await this._hass.callWS(message);
         this._seedDrafts();
         this._notify(this._t("panel.saved"));
       } catch (error) {
@@ -396,7 +415,7 @@
       if (!this._hass?.user?.is_admin || !this._config?.panel_id || !this._hub) return;
       const settings = this._hubSettings();
       const itemOrder = {...(settings.item_order || {})};
-      for (const category of availableCategories(this._notifications)) {
+      for (const category of localizedCategories(this._notifications, this._hass)) {
         itemOrder[category] = this._categoryItems(category)
           .map(item => itemId(category, item));
       }
@@ -404,10 +423,10 @@
         columns:deviceColumns(settings.columns),
         item_order:itemOrder,
       };
-      this._settingsCategory = availableCategories(this._notifications)
+      this._settingsCategory = localizedCategories(this._notifications, this._hass)
         .includes(this._category)
         ? this._category
-        : availableCategories(this._notifications)[0] || "";
+        : localizedCategories(this._notifications, this._hass)[0] || "";
       this._settingsError = "";
       this._settingsOpen = true;
       this._renderSoon();
@@ -526,7 +545,7 @@
     }
 
     _selectSettingsCategory(category) {
-      const categories = availableCategories(this._notifications);
+      const categories = localizedCategories(this._notifications, this._hass);
       if (!this._settingsOpen || !categories.includes(category)) return;
       this._settingsCategory = category;
       const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
@@ -550,7 +569,7 @@
         this._selectSettingsCategory(target.dataset.category);
       }
       else if (action === "category") {
-        const categories = availableCategories(this._notifications);
+        const categories = localizedCategories(this._notifications, this._hass);
         if (categories.includes(target.dataset.category)) {
           this._category = target.dataset.category;
           this._renderSoon();
@@ -618,18 +637,29 @@
     }
 
     _deviceCard(device, category, admin) {
-      const key = `${category}:${device.device_id}`;
-      const draft = this._deviceDrafts.get(key) || {enabled:Boolean(device.enabled)};
+      const deviceId = itemId(category, device);
+      const sourceEnabled = category === "automations"
+        ? device.notification_enabled
+        : device.enabled;
+      const key = `${category}:${deviceId}`;
+      const draft = this._deviceDrafts.get(key) || {enabled:Boolean(sourceEnabled)};
       const busy = this._busy.has(key);
       const unchanged = !this._isDeviceDirty(key);
-      const icon = category === "smoke_alarms" ? "mdi:smoke-detector" : "mdi:door";
+      const icon = category === "smoke_alarms"
+        ? "mdi:smoke-detector"
+        : category === "automations" ? "mdi:robot" : "mdi:door";
       const detail = category === "smoke_alarms"
         ? device.device_type
-        : [device.sensor_type, device.device_type].filter(Boolean).join(" · ");
-      return `<article class="device-card" data-device-notification data-category="${category}" data-device-id="${device.device_id}">
+        : category === "automations"
+          ? this._t("automation.notification_description")
+          : [device.sensor_type, device.device_type].filter(Boolean).join(" · ");
+      const fallbackName = category === "automations"
+        ? `Automation ${deviceId}`
+        : `${detail} ${deviceId}`;
+      return `<article class="device-card" data-device-notification data-category="${category}" data-device-id="${deviceId}">
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
-          <div><h2>${esc(device.name || `${detail} ${device.device_id}`)}</h2>
+          <div><h2>${esc(device.name || fallbackName)}</h2>
             <p>${esc(detail)}</p></div>
           <span class="status configured">${esc(this._t(draft.enabled ? "notification.enabled" : "notification.disabled"))}</span>
         </div>
@@ -661,7 +691,11 @@
           .map(item => this._equipmentCard(item, admin)).join("");
       }
       if (category === "automations") {
-        return this._categoryItems(category).map(item => this._automationCard(item)).join("");
+        return this._categoryItems(category)
+          .map(item => item.writable
+            ? this._deviceCard(item, category, admin)
+            : this._automationCard(item))
+          .join("");
       }
       return this._categoryItems(category)
         .map(item => this._deviceCard(item, category, admin)).join("");
@@ -689,7 +723,7 @@
 
     _settingsMarkup() {
       if (!this._settingsDraft) return "";
-      const categories = availableCategories(this._notifications);
+      const categories = localizedCategories(this._notifications, this._hass);
       const selectedCategory = categories.includes(this._settingsCategory)
         ? this._settingsCategory
         : categories[0];
@@ -885,7 +919,7 @@
       if (this._loading) content = `<p class="message" role="status">${esc(this._t("panel.loading"))}</p>`;
       else if (this._error) content = `<div class="message error" role="alert">${esc(this._error)}<br><ha-button data-action="retry">${esc(this._t("panel.retry"))}</ha-button></div>`;
       else {
-        const categories = availableCategories(this._notifications);
+        const categories = localizedCategories(this._notifications, this._hass);
         const categoryTabs = categories.length ? `<nav class="category-tabs" role="tablist">
           ${categories.map(category => `<button class="category-tab" data-action="category" data-category="${category}" role="tab" aria-selected="${category === this._category}">${esc(this._t(`category.${category}`))}</button>`).join("")}
         </nav>` : "";
@@ -944,6 +978,7 @@
   window.WiserNotificationsPanelTest = {
     compatibleEquipment,
     availableCategories,
+    localizedCategories,
     deviceColumns,
     itemId,
     languageFor,

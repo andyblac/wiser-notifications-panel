@@ -109,6 +109,23 @@ test("shows tabs only for notification categories reported by the hub", () => {
   );
 });
 
+test("orders category tabs alphabetically using their translated labels", () => {
+  const {helpers} = setup();
+  const notifications = {
+    equipment:[{equipment_id:1, monitored:true, notifications:{}}],
+    smoke_alarms:[{}], sensors:[{}], automations:[{}],
+  };
+
+  assert.deepEqual(
+    Array.from(helpers.localizedCategories(notifications, {language:"en-US"})),
+    ["automations", "equipment", "sensors", "smoke_alarms"],
+  );
+  assert.deepEqual(
+    Array.from(helpers.localizedCategories(notifications, {language:"fr"})),
+    ["automations", "sensors", "smoke_alarms", "equipment"],
+  );
+});
+
 test("orders devices from saved panel settings and appends new devices", () => {
   const {helpers} = setup();
   const items = [
@@ -236,6 +253,84 @@ test("saves a supported device notification toggle", async () => {
     enabled:false,
   });
   assert.equal(panel._deviceDrafts.get("sensors:8").enabled, false);
+});
+
+test("saves a writable automation notification toggle", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._deviceDrafts.set("automations:12", {enabled:false});
+  panel._originalDeviceDrafts.set("automations:12", {enabled:true});
+  let request;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      request = message;
+      return {
+        equipment:[], smoke_alarms:[], sensors:[],
+        automations:[{
+          automation_id:12,
+          name:"Door left open",
+          notification_enabled:false,
+          writable:true,
+        }],
+      };
+    },
+  };
+
+  await panel._saveDevice({
+    dataset:{category:"automations", deviceId:"12"},
+  });
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/automation_notification/set",
+    hub:"Home",
+    automation_id:12,
+    enabled:false,
+  });
+  assert.equal(panel._deviceDrafts.get("automations:12").enabled, false);
+});
+
+test("renders writable automations with notification controls", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[],
+    automations:[{
+      automation_id:12,
+      name:"Door left open",
+      notification_enabled:true,
+      writable:true,
+    }],
+  };
+  panel._seedDrafts();
+
+  const markup = panel._categoryContent("automations", true);
+
+  assert.match(markup, /data-device-notification data-category="automations" data-device-id="12"/);
+  assert.match(markup, /data-field="enabled" type="checkbox" checked/);
+  assert.match(markup, /data-action="save-device"/);
+  assert.doesNotMatch(markup, /class="app-managed"/);
+});
+
+test("keeps unsupported automation notifications read-only", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[],
+    automations:[{
+      automation_id:12,
+      name:"Door left open",
+      notification_enabled:true,
+      writable:false,
+    }],
+  };
+
+  const markup = panel._categoryContent("automations", true);
+
+  assert.match(markup, /class="app-managed"/);
+  assert.doesNotMatch(markup, /data-field="enabled"/);
 });
 
 test("saves notification layout settings through the shared panel API", async () => {

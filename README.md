@@ -25,6 +25,7 @@ The panel requires a compatible version of the Wiser Home Assistant integration 
 - `wiser/power_notification/set`
 - `wiser/power_notification/delete`
 - `wiser/device_notification/set`
+- `wiser/automation_notification/set`
 - `wiser/panel/configure`
 
 Write operations require a Home Assistant administrator account.
