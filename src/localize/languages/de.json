@@ -33,6 +33,7 @@
   "automation.unavailable": "Automatisierungssteuerungen sind mit der installierten Wiser-Integration nicht verfügbar.",
   "automation.deleted": "Automatisierung vom Wiser Hub gelöscht.",
   "automation.delete_error": "Automatisierung konnte nicht gelöscht werden: {error}",
+  "automation.delete_title": "Automatisierung löschen",
   "automation.confirm_delete": "Diese Wiser-Automatisierung löschen?",
   "notification.under": "Unterleistungsbenachrichtigung",
   "notification.over": "Überleistungsbenachrichtigung",

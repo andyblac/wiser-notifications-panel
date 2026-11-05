@@ -33,6 +33,7 @@
   "automation.unavailable": "Automation controls are unavailable with the installed Wiser integration.",
   "automation.deleted": "Automation deleted from the Wiser hub.",
   "automation.delete_error": "Unable to delete the automation: {error}",
+  "automation.delete_title": "Delete automation",
   "automation.confirm_delete": "Delete this Wiser automation?",
   "notification.under": "Under-power notification",
   "notification.over": "Over-power notification",

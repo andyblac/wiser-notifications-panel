@@ -33,6 +33,7 @@
   "automation.unavailable": "Automaatioiden hallinta ei ole käytettävissä asennetulla Wiser-integraatiolla.",
   "automation.deleted": "Automaatio poistettiin Wiser-keskittimestä.",
   "automation.delete_error": "Automaatiota ei voitu poistaa: {error}",
+  "automation.delete_title": "Poista automaatio",
   "automation.confirm_delete": "Poistetaanko tämä Wiser-automaatio?",
   "notification.under": "Alhaisen tehon ilmoitus",
   "notification.over": "Korkean tehon ilmoitus",

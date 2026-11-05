@@ -33,6 +33,7 @@
   "automation.unavailable": "Os controlos de automação não estão disponíveis com a integração Wiser instalada.",
   "automation.deleted": "Automação eliminada do hub Wiser.",
   "automation.delete_error": "Não foi possível eliminar a automação: {error}",
+  "automation.delete_title": "Eliminar automação",
   "automation.confirm_delete": "Eliminar esta automação Wiser?",
   "notification.under": "Notificação de potência baixa",
   "notification.over": "Notificação de potência alta",

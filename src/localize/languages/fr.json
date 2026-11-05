@@ -33,6 +33,7 @@
   "automation.unavailable": "Les commandes d’automatisation ne sont pas disponibles avec l’intégration Wiser installée.",
   "automation.deleted": "Automatisation supprimée du hub Wiser.",
   "automation.delete_error": "Impossible de supprimer l’automatisation : {error}",
+  "automation.delete_title": "Supprimer l’automatisation",
   "automation.confirm_delete": "Supprimer cette automatisation Wiser ?",
   "notification.under": "Notification de sous-puissance",
   "notification.over": "Notification de surpuissance",

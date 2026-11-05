@@ -33,6 +33,7 @@
   "automation.unavailable": "Automatiseringskontroller er ikke tilgjengelige med den installerte Wiser-integrasjonen.",
   "automation.deleted": "Automatiseringen ble slettet fra Wiser-huben.",
   "automation.delete_error": "Kunne ikke slette automatiseringen: {error}",
+  "automation.delete_title": "Slett automatisering",
   "automation.confirm_delete": "Slette denne Wiser-automatiseringen?",
   "notification.under": "Varsel om lav effekt",
   "notification.over": "Varsel om høy effekt",

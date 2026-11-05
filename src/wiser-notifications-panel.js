@@ -115,6 +115,7 @@
       this._settingsCategory = "";
       this._settingsError = "";
       this._savingSettings = false;
+      this._automationDeleteId = null;
       this._draggedItem = null;
       this._renderFrame = 0;
       this._subscriptionConnection = null;
@@ -433,10 +434,29 @@
       }
     }
 
-    async _deleteAutomation(section) {
+    _openAutomationDelete(section) {
       if (!this._hass?.user?.is_admin) return;
-      if (!window.confirm(this._t("automation.confirm_delete"))) return;
-      const automationId = Number(section.dataset.deviceId);
+      const automationId = Number(section?.dataset?.deviceId);
+      if (!Number.isInteger(automationId)) return;
+      this._automationDeleteId = automationId;
+      const dialog = this.shadowRoot.querySelector?.("#automation-delete-dialog");
+      if (dialog) dialog.open = true;
+    }
+
+    _closeAutomationDelete() {
+      this._automationDeleteId = null;
+      const dialog = this.shadowRoot.querySelector?.("#automation-delete-dialog");
+      if (dialog) dialog.open = false;
+    }
+
+    async _confirmAutomationDelete() {
+      const automationId = this._automationDeleteId;
+      this._closeAutomationDelete();
+      if (Number.isInteger(automationId)) await this._deleteAutomation(automationId);
+    }
+
+    async _deleteAutomation(automationId) {
+      if (!this._hass?.user?.is_admin) return;
       const key = `automations:${automationId}`;
       this._busy.add(key);
       this._error = "";
@@ -644,7 +664,9 @@
       else if (action === "settings-save") this._saveSettings();
       else if (action === "save") this._save(target.closest("[data-notification]"));
       else if (action === "save-device") this._saveDevice(target.closest("[data-device-control]"));
-      else if (action === "delete-automation") this._deleteAutomation(target.closest("[data-device-control]"));
+      else if (action === "delete-automation") this._openAutomationDelete(target.closest("[data-device-control]"));
+      else if (action === "delete-automation-cancel") this._closeAutomationDelete();
+      else if (action === "delete-automation-confirm") this._confirmAutomationDelete();
       else if (action === "delete") this._delete(target.closest("[data-notification]"));
     }
 
@@ -679,7 +701,7 @@
           <label class="enabled"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${controlsDisabled}>
             <span>${esc(this._t("notification.enabled"))}</span></label>
           ${admin ? `<div class="actions">
-            ${configured ? `<ha-button appearance="outlined" variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
+            ${configured ? `<ha-button variant="danger" data-action="delete"${deleteHidden}${controlsDisabled}>${esc(this._t("action.delete"))}</ha-button>` : ""}
             <ha-button data-action="save"${saveHidden}${saveDisabled}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t(configured ? "action.save" : "action.create"))}</ha-button>
           </div>` : ""}
         </div>
@@ -719,6 +741,10 @@
       const fallbackName = category === "automations"
         ? `Automation ${deviceId}`
         : `${detail} ${deviceId}`;
+      const actions = admin ? `<div class="actions">
+        ${category === "automations" && device.deletable ? `<ha-button variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>` : ""}
+        <ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>
+      </div>` : "";
       return `<article class="device-card" data-device-control data-category="${category}" data-device-id="${deviceId}">
         <div class="device-heading">
           <div class="equipment-icon"><ha-icon icon="${icon}"></ha-icon></div>
@@ -729,12 +755,11 @@
         <div class="device-controls">
           <div><h3>${esc(this._t("notification.enabled"))}</h3>
             <p>${esc(this._t(category === "automations" ? "automation.description" : "device.notification_description"))}</p></div>
-          <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
-            <span>${esc(this._t("notification.enabled"))}</span></label>
-          ${admin ? category === "automations" ? `<div class="actions">
-            ${device.deletable ? `<ha-button appearance="outlined" variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>` : ""}
-            <ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>
-          </div>` : `<ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>` : ""}
+          <div class="notification-footer">
+            <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
+              <span>${esc(this._t("notification.enabled"))}</span></label>
+            ${actions}
+          </div>
         </div>
       </article>`;
     }
@@ -856,10 +881,10 @@
         .device-heading h2 { margin:0; font-size:18px; }
         .device-heading p { margin:4px 0 0; color:var(--secondary-text-color); font-size:13px; }
         .device-heading .status { margin-inline-start:auto; }
-        .device-controls { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; align-items:center; gap:14px; padding:14px 17px; border-top:1px solid var(--divider-color); }
+        .device-controls { padding:14px 17px; border-top:1px solid var(--divider-color); }
         .device-controls h3 { margin:0 0 4px; font-size:16px; }
         .device-controls p, .app-managed { margin:0; color:var(--secondary-text-color); font-size:13px; }
-        .device-toggle { grid-column:auto; white-space:nowrap; }
+        .device-toggle { white-space:nowrap; }
         .device-controls [hidden] { display:none !important; }
         .app-managed { padding:0 17px 15px; }
         .equipment-icon, .notification-icon { display:grid; place-items:center; flex:0 0 auto; border-radius:14px; color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 12%, transparent); }
@@ -912,6 +937,7 @@
         .settings-version { margin-top:24px; color:var(--secondary-text-color); font-size:12px; text-align:right; }
         .settings-error { min-height:20px; margin:14px 0 0 !important; color:var(--error-color, #db4437) !important; }
         .settings-actions { display:flex; justify-content:flex-end; gap:8px; }
+        .delete-confirmation { min-width:min(520px, 70vw); margin:0; padding:4px 2px 24px; color:var(--primary-text-color); }
         @container (max-width:680px) {
           .fields { grid-template-columns:1fr; }
           .notification-heading { min-height:124px; }
@@ -950,8 +976,6 @@
           .hub-tab { padding:0 12px; }
           main { padding-top:20px; }
           .hero h2 { font-size:24px; }
-          .device-controls { grid-template-columns:1fr auto; }
-          .device-controls > div { grid-column:1 / -1; }
         }
         @media (max-width:500px) {
           .hero { align-items:center; }
@@ -1009,7 +1033,27 @@
             <ha-button class="refresh" appearance="plain" data-action="refresh"><ha-icon icon="mdi:refresh"></ha-icon><span>${esc(this._t("panel.refresh"))}</span></ha-button></div>
           <div aria-live="polite">${content}</div>
         </main>
-        <ha-dialog id="settings-dialog" width="medium">${this._settingsOpen ? this._settingsMarkup() : ""}</ha-dialog>`;
+        <ha-dialog id="settings-dialog" width="medium">${this._settingsOpen ? this._settingsMarkup() : ""}</ha-dialog>
+        <ha-dialog id="automation-delete-dialog" width="medium">
+          <p class="delete-confirmation">${esc(this._t("automation.confirm_delete"))}</p>
+          <div class="settings-actions" id="automation-delete-actions" slot="footer">
+            <ha-button appearance="plain" data-action="delete-automation-cancel">${esc(this._t("action.cancel"))}</ha-button>
+            <ha-button variant="danger" data-action="delete-automation-confirm">${esc(this._t("action.delete"))}</ha-button>
+          </div>
+        </ha-dialog>`;
+      const automationDeleteDialog = this.shadowRoot.querySelector?.("#automation-delete-dialog");
+      if (automationDeleteDialog) {
+        const heading = this._t("automation.delete_title");
+        automationDeleteDialog.setAttribute?.("aria-label", heading);
+        automationDeleteDialog.setAttribute?.("header-title", heading);
+        automationDeleteDialog.heading = heading;
+        if (!("headerTitle" in (customElements.get("ha-dialog")?.prototype || {}))) {
+          automationDeleteDialog.querySelector?.("#automation-delete-actions")?.removeAttribute("slot");
+        }
+        automationDeleteDialog.addEventListener?.("closed", () => this._closeAutomationDelete(), {once:true});
+        automationDeleteDialog.addEventListener?.("close-dialog", () => this._closeAutomationDelete(), {once:true});
+        if (Number.isInteger(this._automationDeleteId)) automationDeleteDialog.open = true;
+      }
       if (this._settingsOpen) {
         const dialog = this.shadowRoot.querySelector?.("#settings-dialog");
         if (dialog) {

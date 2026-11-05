@@ -347,7 +347,7 @@ test("deletes a Wiser automation", async () => {
     },
   };
 
-  await panel._deleteAutomation({dataset:{deviceId:"12"}});
+  await panel._deleteAutomation(12);
 
   assert.deepEqual(plain(request), {
     type:"wiser/automation/delete",
@@ -355,6 +355,48 @@ test("deletes a Wiser automation", async () => {
     automation_id:12,
   });
   assert.equal(panel._notifications.automations.length, 0);
+});
+
+test("opens a native Home Assistant automation delete dialog", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._hass = {user:{is_admin:true}};
+  const dialog = {open:false};
+  panel.shadowRoot.querySelector = selector => selector === "#automation-delete-dialog" ? dialog : null;
+
+  panel._openAutomationDelete({dataset:{deviceId:"12"}});
+
+  assert.equal(panel._automationDeleteId, 12);
+  assert.equal(dialog.open, true);
+});
+
+test("renders native Home Assistant automation delete actions", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._render();
+
+  assert.match(panel.shadowRoot.innerHTML, /<ha-dialog id="automation-delete-dialog" width="medium">/);
+  assert.match(panel.shadowRoot.innerHTML, /class="delete-confirmation">Delete this Wiser automation\?/);
+  assert.match(panel.shadowRoot.innerHTML, /slot="footer"/);
+  assert.match(panel.shadowRoot.innerHTML, /variant="danger" data-action="delete-automation-confirm">Delete/);
+});
+
+test("keeps the automation delete dialog open across panel refreshes", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._automationDeleteId = 12;
+  const dialog = {
+    open:false,
+    setAttribute() {},
+    addEventListener() {},
+    querySelector() { return null; },
+  };
+  panel.shadowRoot.querySelector = selector => selector === "#automation-delete-dialog" ? dialog : null;
+
+  panel._render();
+
+  assert.equal(dialog.open, true);
+  assert.equal(panel._automationDeleteId, 12);
 });
 
 test("renders writable automations with enabled controls", () => {
@@ -379,6 +421,7 @@ test("renders writable automations with enabled controls", () => {
   assert.match(markup, /data-field="enabled" type="checkbox" checked/);
   assert.match(markup, /data-action="save-device"/);
   assert.match(markup, /variant="danger" data-action="delete-automation"/);
+  assert.match(markup, /class="notification-footer">[\s\S]*data-action="delete-automation"/);
   assert.doesNotMatch(markup, /class="app-managed"/);
 });
 
@@ -597,7 +640,7 @@ test("configured notifications use a destructive delete button", () => {
   const markup = panel._notification({equipment_id:1}, "over", true);
 
   assert.match(markup, /data-action="delete"/);
-  assert.match(markup, /appearance="outlined" variant="danger"/);
+  assert.match(markup, /<ha-button variant="danger" data-action="delete"/);
   assert.match(markup, /data-action="save" hidden disabled/);
   assert.doesNotMatch(markup, /data-action="delete" hidden/);
 });

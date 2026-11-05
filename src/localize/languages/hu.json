@@ -33,6 +33,7 @@
   "automation.unavailable": "Az automatizálási vezérlők nem érhetők el a telepített Wiser-integrációval.",
   "automation.deleted": "Az automatizálás törölve a Wiser központról.",
   "automation.delete_error": "Az automatizálás nem törölhető: {error}",
+  "automation.delete_title": "Automatizálás törlése",
   "automation.confirm_delete": "Törli ezt a Wiser automatizálást?",
   "notification.under": "Alacsony teljesítmény értesítés",
   "notification.over": "Magas teljesítmény értesítés",
