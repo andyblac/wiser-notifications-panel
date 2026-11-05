@@ -333,6 +333,30 @@ test("saves a writable automation enabled toggle", async () => {
   assert.equal(panel._deviceDrafts.get("automations:12").enabled, false);
 });
 
+test("deletes a Wiser automation", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  let request;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async message => {
+      request = message;
+      return {equipment:[], smoke_alarms:[], sensors:[], automations:[]};
+    },
+  };
+
+  await panel._deleteAutomation({dataset:{deviceId:"12"}});
+
+  assert.deepEqual(plain(request), {
+    type:"wiser/automation/delete",
+    hub:"Home",
+    automation_id:12,
+  });
+  assert.equal(panel._notifications.automations.length, 0);
+});
+
 test("renders writable automations with enabled controls", () => {
   const {Panel} = setup();
   const panel = new Panel();
@@ -343,6 +367,7 @@ test("renders writable automations with enabled controls", () => {
       name:"Door left open",
       enabled:true,
       writable:true,
+      deletable:true,
     }],
   };
   panel._seedDrafts();
@@ -353,6 +378,7 @@ test("renders writable automations with enabled controls", () => {
   assert.match(markup, /Enable or disable this automation\./);
   assert.match(markup, /data-field="enabled" type="checkbox" checked/);
   assert.match(markup, /data-action="save-device"/);
+  assert.match(markup, /variant="danger" data-action="delete-automation"/);
   assert.doesNotMatch(markup, /class="app-managed"/);
 });
 

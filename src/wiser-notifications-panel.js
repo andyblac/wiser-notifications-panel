@@ -433,6 +433,30 @@
       }
     }
 
+    async _deleteAutomation(section) {
+      if (!this._hass?.user?.is_admin) return;
+      if (!window.confirm(this._t("automation.confirm_delete"))) return;
+      const automationId = Number(section.dataset.deviceId);
+      const key = `automations:${automationId}`;
+      this._busy.add(key);
+      this._error = "";
+      this._renderSoon();
+      try {
+        this._notifications = await this._hass.callWS({
+          type:"wiser/automation/delete",
+          hub:this._hub,
+          automation_id:automationId,
+        });
+        this._seedDrafts();
+        this._notify(this._t("automation.deleted"));
+      } catch (error) {
+        this._error = this._t("automation.delete_error", {error:error?.message || error});
+      } finally {
+        this._busy.delete(key);
+        this._renderSoon();
+      }
+    }
+
     _hubSettings(hub = this._hub) {
       return this._config?.card_configs?.[hub] || {};
     }
@@ -620,6 +644,7 @@
       else if (action === "settings-save") this._saveSettings();
       else if (action === "save") this._save(target.closest("[data-notification]"));
       else if (action === "save-device") this._saveDevice(target.closest("[data-device-control]"));
+      else if (action === "delete-automation") this._deleteAutomation(target.closest("[data-device-control]"));
       else if (action === "delete") this._delete(target.closest("[data-notification]"));
     }
 
@@ -706,7 +731,10 @@
             <p>${esc(this._t(category === "automations" ? "automation.description" : "device.notification_description"))}</p></div>
           <label class="enabled device-toggle"><input data-field="enabled" type="checkbox"${draft.enabled ? " checked" : ""}${!admin || busy ? " disabled" : ""}>
             <span>${esc(this._t("notification.enabled"))}</span></label>
-          ${admin ? `<ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>` : ""}
+          ${admin ? category === "automations" ? `<div class="actions">
+            ${device.deletable ? `<ha-button appearance="outlined" variant="danger" data-action="delete-automation"${busy ? " disabled" : ""}>${esc(this._t("action.delete"))}</ha-button>` : ""}
+            <ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>
+          </div>` : `<ha-button data-action="save-device"${unchanged ? " hidden disabled" : ""}${busy ? " disabled" : ""}>${busy ? `<ha-circular-progress active size="small"></ha-circular-progress>` : esc(this._t("action.save"))}</ha-button>` : ""}
         </div>
       </article>`;
     }

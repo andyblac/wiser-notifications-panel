@@ -11,6 +11,7 @@ Notifications are stored on the Wiser hub. The panel does not create Home Assist
 - Enable, disable, update, or delete existing notifications.
 - Manage supported smoke alarm and sensor notification toggles.
 - Enable or disable Wiser automations.
+- Delete Wiser automations.
 - Support multiple Wiser hubs.
 - Configure the desktop column count and device order for each notification category.
 - Responsive Home Assistant-native layout.
@@ -27,6 +28,7 @@ The panel requires a compatible version of the Wiser Home Assistant integration 
 - `wiser/power_notification/delete`
 - `wiser/device_notification/set`
 - `wiser/automation/set_enabled`
+- `wiser/automation/delete`
 - `wiser/panel/configure`
 
 Write operations require a Home Assistant administrator account.
