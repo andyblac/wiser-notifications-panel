@@ -21,6 +21,8 @@
   "panel.settings_description": "Wählen Sie die Anzahl der Gerätekarten pro Zeile und ziehen Sie Geräte, um sie anzuordnen.",
   "panel.settings_save_error": "Panel-Einstellungen konnten nicht gespeichert werden: {error}",
   "panel.devices_per_row": "Geräte pro Zeile",
+  "panel.devices_per_row_desktop": "Geräte pro Zeile — Desktop",
+  "panel.devices_per_row_mobile": "Geräte pro Zeile — Mobilgerät",
   "panel.device_order": "Gerätereihenfolge",
   "panel.order_hint": "Ziehen Sie Geräte, um ihre Anzeigereihenfolge zu ändern.",
   "equipment.monitored": "Überwachtes Gerät",

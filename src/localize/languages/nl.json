@@ -21,6 +21,8 @@
   "panel.settings_description": "Kies hoeveel apparaatkaarten per rij worden weergegeven en sleep apparaten om ze te ordenen.",
   "panel.settings_save_error": "Kan paneelinstellingen niet opslaan: {error}",
   "panel.devices_per_row": "Apparaten per rij",
+  "panel.devices_per_row_desktop": "Apparaten per rij — desktop",
+  "panel.devices_per_row_mobile": "Apparaten per rij — mobiel",
   "panel.device_order": "Apparaatvolgorde",
   "panel.order_hint": "Sleep apparaten om hun weergavevolgorde te wijzigen.",
   "equipment.monitored": "Bewaakte apparatuur",

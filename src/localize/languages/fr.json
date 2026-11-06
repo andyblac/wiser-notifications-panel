@@ -21,6 +21,8 @@
   "panel.settings_description": "Choisissez le nombre de cartes d’appareil par ligne et faites glisser les appareils pour les organiser.",
   "panel.settings_save_error": "Impossible d’enregistrer les paramètres du panneau : {error}",
   "panel.devices_per_row": "Appareils par ligne",
+  "panel.devices_per_row_desktop": "Appareils par ligne — ordinateur",
+  "panel.devices_per_row_mobile": "Appareils par ligne — mobile",
   "panel.device_order": "Ordre des appareils",
   "panel.order_hint": "Faites glisser les appareils pour modifier leur ordre d’affichage.",
   "equipment.monitored": "Équipement surveillé",

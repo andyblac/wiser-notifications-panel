@@ -21,6 +21,8 @@
   "panel.settings_description": "Valitse laitekorttien määrä rivillä ja järjestä laitteet vetämällä.",
   "panel.settings_save_error": "Paneelin asetuksia ei voitu tallentaa: {error}",
   "panel.devices_per_row": "Laitteita rivillä",
+  "panel.devices_per_row_desktop": "Laitteita rivillä — työpöytä",
+  "panel.devices_per_row_mobile": "Laitteita rivillä — mobiili",
   "panel.device_order": "Laitteiden järjestys",
   "panel.order_hint": "Muuta näyttöjärjestystä vetämällä laitteita.",
   "equipment.monitored": "Valvottu laite",

@@ -181,6 +181,7 @@ test("orders devices from saved panel settings and appends new devices", () => {
   assert.equal(helpers.deviceColumns(3), 3);
   assert.equal(helpers.deviceColumns(4), 4);
   assert.equal(helpers.deviceColumns(5), 2);
+  assert.equal(helpers.deviceColumns(undefined, 1), 1);
   assert.equal(helpers.deviceColumns("invalid"), 2);
 });
 
@@ -866,6 +867,7 @@ test("saves notification layout settings through the shared panel API", async ()
   panel._settingsOpen = true;
   panel._settingsDraft = {
     columns:3,
+    mobile_device_columns:1,
     item_order:{equipment:["2", "1"], sensors:["8"]},
   };
   let request;
@@ -879,21 +881,63 @@ test("saves notification layout settings through the shared panel API", async ()
     configs:{Home:{
       existing_setting:true,
       columns:3,
+      mobile_device_columns:1,
       item_order:{equipment:["2", "1"], sensors:["8"]},
     }},
   });
   assert.equal(panel._config.card_configs.Home.columns, 3);
+  assert.equal(panel._config.card_configs.Home.mobile_device_columns, 1);
   assert.equal(panel._settingsOpen, false);
 });
 
-test("uses the native Home Assistant form for desktop device columns", () => {
+test("defaults mobile layouts to one device per row", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._hass = {user:{is_admin:true}};
+  panel._config = {
+    panel_id:"notifications",
+    card_configs:{Home:{columns:3}},
+  };
+  panel._notifications = {
+    equipment:[], smoke_alarms:[], sensors:[], automations:[],
+  };
+
+  panel._openSettings();
+
+  assert.equal(panel._settingsDraft.columns, 3);
+  assert.equal(panel._settingsDraft.mobile_device_columns, 1);
+});
+
+test("renders separate desktop and mobile device column classes", () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._loading = false;
+  panel._hub = "Home";
+  panel._hubs = ["Home"];
+  panel._hass = {user:{is_admin:true}};
+  panel._config = {
+    card_configs:{Home:{columns:4, mobile_device_columns:2}},
+  };
+  panel._notifications = {
+    equipment:[{equipment_id:1, name:"Plug", monitored:true, notifications:{}}],
+    smoke_alarms:[], sensors:[], automations:[],
+  };
+
+  panel._render();
+
+  assert.match(panel.shadowRoot.innerHTML, /columns-4 mobile-columns-2/);
+});
+
+test("uses the native Home Assistant form for desktop and mobile device columns", () => {
   const {Panel} = setup();
   const panel = new Panel();
   panel._notifications = {
     equipment:[{equipment_id:1, name:"Plug", monitored:true, notifications:{}}],
     smoke_alarms:[], sensors:[], automations:[],
   };
-  panel._settingsDraft = {columns:2, item_order:{equipment:["1"]}};
+  panel._settingsDraft = {columns:2, mobile_device_columns:1, item_order:{equipment:["1"]}};
 
   const markup = panel._settingsMarkup();
 

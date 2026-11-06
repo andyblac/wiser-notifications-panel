@@ -21,6 +21,8 @@
   "panel.settings_description": "Escolha quantos cartões de dispositivo aparecem por linha e arraste os dispositivos para os organizar.",
   "panel.settings_save_error": "Não foi possível guardar as definições do painel: {error}",
   "panel.devices_per_row": "Dispositivos por linha",
+  "panel.devices_per_row_desktop": "Dispositivos por linha — computador",
+  "panel.devices_per_row_mobile": "Dispositivos por linha — móvel",
   "panel.device_order": "Ordem dos dispositivos",
   "panel.order_hint": "Arraste os dispositivos para alterar a ordem de apresentação.",
   "equipment.monitored": "Equipamento monitorizado",

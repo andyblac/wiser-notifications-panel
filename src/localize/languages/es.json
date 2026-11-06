@@ -21,6 +21,8 @@
   "panel.settings_description": "Elige cuántas tarjetas de dispositivo aparecen por fila y arrastra los dispositivos para ordenarlos.",
   "panel.settings_save_error": "No se pudieron guardar los ajustes del panel: {error}",
   "panel.devices_per_row": "Dispositivos por fila",
+  "panel.devices_per_row_desktop": "Dispositivos por fila — escritorio",
+  "panel.devices_per_row_mobile": "Dispositivos por fila — móvil",
   "panel.device_order": "Orden de dispositivos",
   "panel.order_hint": "Arrastra los dispositivos para cambiar su orden de visualización.",
   "equipment.monitored": "Equipo monitorizado",

@@ -63,9 +63,11 @@
     ));
   }
 
-  function deviceColumns(value) {
+  function deviceColumns(value, fallback = 2) {
     const columns = Number(value);
-    return [1, 2, 3, 4].includes(columns) ? columns : 2;
+    if ([1, 2, 3, 4].includes(columns)) return columns;
+    const fallbackColumns = Number(fallback);
+    return [1, 2, 3, 4].includes(fallbackColumns) ? fallbackColumns : 2;
   }
 
   function itemId(category, item) {
@@ -122,6 +124,10 @@
       this._subscriptionConnection = null;
       this._unsubscribeUpdates = null;
       this._subscriptionGeneration = 0;
+      this._mobileMedia = window.matchMedia?.("(max-width:800px)") || null;
+      this._mobileMediaChanged = () => {
+        if (this._settingsOpen) this._renderSoon();
+      };
       this.shadowRoot.addEventListener("click", event => this._click(event));
       this.shadowRoot.addEventListener("input", event => this._input(event));
       this.shadowRoot.addEventListener("change", event => this._input(event));
@@ -167,6 +173,7 @@
     }
 
     connectedCallback() {
+      this._mobileMedia?.addEventListener?.("change", this._mobileMediaChanged);
       this._renderSoon();
       if (this._hass) {
         this._subscribeUpdates();
@@ -175,6 +182,7 @@
     }
 
     disconnectedCallback() {
+      this._mobileMedia?.removeEventListener?.("change", this._mobileMediaChanged);
       this._unsubscribeFromUpdates();
       if (this._renderFrame) cancelAnimationFrame(this._renderFrame);
       this._renderFrame = 0;
@@ -584,6 +592,7 @@
       }
       this._settingsDraft = {
         columns:deviceColumns(settings.columns),
+        mobile_device_columns:deviceColumns(settings.mobile_device_columns, 1),
         item_order:itemOrder,
       };
       this._settingsCategory = localizedCategories(this._notifications, this._hass)
@@ -616,6 +625,10 @@
       try {
         const settings = {...this._hubSettings()};
         settings.columns = deviceColumns(this._settingsDraft.columns);
+        settings.mobile_device_columns = deviceColumns(
+          this._settingsDraft.mobile_device_columns,
+          1,
+        );
         settings.item_order = Object.fromEntries(Object.entries(this._settingsDraft.item_order)
           .map(([category, order]) => [category, [...new Set(order.map(String))]]));
         await this._hass.callWS({
@@ -1185,6 +1198,10 @@
           .app-managed { padding:0 12px 12px; }
         }
         @media (max-width:800px) {
+          .equipment-list.mobile-columns-1 { grid-template-columns:minmax(0, 1fr); }
+          .equipment-list.mobile-columns-2 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+          .equipment-list.mobile-columns-3 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+          .equipment-list.mobile-columns-4 { grid-template-columns:repeat(4, minmax(0, 1fr)); }
           .app-header { padding:0 8px; gap:4px; }
           .app-header h1 { font-size:16px; }
           .hub-tabs { margin-inline-start:0; }
@@ -1232,9 +1249,13 @@
         </nav>` : "";
         const categoryContent = this._categoryContent(this._category, admin);
         const columns = deviceColumns(this._hubSettings().columns);
+        const mobileColumns = deviceColumns(
+          this._hubSettings().mobile_device_columns,
+          1,
+        );
         content = `${admin ? "" : `<p class="read-only">${esc(this._t("panel.read_only"))}</p>`}
           ${categoryTabs}
-          ${categoryContent ? `<div class="equipment-list category-${esc(this._category)} columns-${columns}">${categoryContent}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
+          ${categoryContent ? `<div class="equipment-list category-${esc(this._category)} columns-${columns} mobile-columns-${mobileColumns}">${categoryContent}</div>` : `<p class="message">${esc(this._t("panel.empty"))}</p>`}`;
       }
       this.shadowRoot.innerHTML = `${this._style()}
         <header class="${headerClass}">
@@ -1302,18 +1323,27 @@
           dialog.addEventListener?.("close-dialog", () => this._closeSettings(), {once:true});
           const columnForm = dialog.querySelector?.(".column-setting");
           if (columnForm) {
+            const mobile = Boolean(this._mobileMedia?.matches);
+            const columnKey = mobile ? "mobile_device_columns" : "columns";
             columnForm.hass = this._hass;
             columnForm.computeLabel = schema => schema.label;
             columnForm.schema = [{
-              name:"columns",
-              label:`${this._t("panel.devices_per_row")} — desktop`,
+              name:columnKey,
+              label:this._t(mobile
+                ? "panel.devices_per_row_mobile"
+                : "panel.devices_per_row_desktop"),
               selector:{number:{min:1, max:4, step:1, mode:"box"}},
             }];
-            columnForm.data = {columns:this._settingsDraft.columns};
+            columnForm.data = {[columnKey]:this._settingsDraft[columnKey]};
             columnForm.addEventListener?.("value-changed", event => {
               event.stopPropagation();
-              this._settingsDraft.columns = deviceColumns(event.detail?.value?.columns);
-              columnForm.data = {columns:this._settingsDraft.columns};
+              const activeMobile = Boolean(this._mobileMedia?.matches);
+              const activeKey = activeMobile ? "mobile_device_columns" : "columns";
+              this._settingsDraft[activeKey] = deviceColumns(
+                event.detail?.value?.[activeKey],
+                activeMobile ? 1 : 2,
+              );
+              columnForm.data = {[activeKey]:this._settingsDraft[activeKey]};
             });
           }
           dialog.open = true;

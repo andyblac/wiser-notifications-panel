@@ -21,6 +21,8 @@
   "panel.settings_description": "Válassza ki a soronkénti eszközkártyák számát, és húzással rendezze az eszközöket.",
   "panel.settings_save_error": "A panelbeállítások mentése sikertelen: {error}",
   "panel.devices_per_row": "Eszközök soronként",
+  "panel.devices_per_row_desktop": "Eszközök soronként — asztali",
+  "panel.devices_per_row_mobile": "Eszközök soronként — mobil",
   "panel.device_order": "Eszközök sorrendje",
   "panel.order_hint": "Húzza az eszközöket a megjelenítési sorrend módosításához.",
   "equipment.monitored": "Felügyelt berendezés",

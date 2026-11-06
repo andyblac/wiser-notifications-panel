@@ -21,6 +21,8 @@
   "panel.settings_description": "Choose how many device cards appear per row and drag devices to arrange them.",
   "panel.settings_save_error": "Unable to save panel settings: {error}",
   "panel.devices_per_row": "Devices per row",
+  "panel.devices_per_row_desktop": "Devices per row — desktop",
+  "panel.devices_per_row_mobile": "Devices per row — mobile",
   "panel.device_order": "Device order",
   "panel.order_hint": "Drag devices to change their display order.",
   "equipment.monitored": "Monitored equipment",

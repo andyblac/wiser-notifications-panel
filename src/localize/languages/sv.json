@@ -21,6 +21,8 @@
   "panel.settings_description": "Välj hur många enhetskort som visas per rad och dra enheterna för att ordna dem.",
   "panel.settings_save_error": "Det gick inte att spara panelinställningarna: {error}",
   "panel.devices_per_row": "Enheter per rad",
+  "panel.devices_per_row_desktop": "Enheter per rad — dator",
+  "panel.devices_per_row_mobile": "Enheter per rad — mobil",
   "panel.device_order": "Enhetsordning",
   "panel.order_hint": "Dra enheterna för att ändra visningsordningen.",
   "equipment.monitored": "Övervakad utrustning",

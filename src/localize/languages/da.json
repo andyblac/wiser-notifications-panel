@@ -21,6 +21,8 @@
   "panel.settings_description": "Vælg, hvor mange enhedskort der vises pr. række, og træk enhederne for at arrangere dem.",
   "panel.settings_save_error": "Panelindstillingerne kunne ikke gemmes: {error}",
   "panel.devices_per_row": "Enheder pr. række",
+  "panel.devices_per_row_desktop": "Enheder pr. række — computer",
+  "panel.devices_per_row_mobile": "Enheder pr. række — mobil",
   "panel.device_order": "Enhedsrækkefølge",
   "panel.order_hint": "Træk enhederne for at ændre deres visningsrækkefølge.",
   "equipment.monitored": "Overvåget udstyr",
