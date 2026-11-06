@@ -135,7 +135,7 @@ test("shows monitored equipment and equipment with configured notifications", ()
   assert.deepEqual(Array.from(helpers.compatibleEquipment(equipment), item => item.equipment_id), [1, 2]);
 });
 
-test("shows tabs only for notification categories reported by the hub", () => {
+test("always shows Automations and limits other tabs to categories reported by the hub", () => {
   const {helpers} = setup();
   const notifications = {
     equipment:[{equipment_id:1, monitored:true, notifications:{}}],
@@ -146,7 +146,7 @@ test("shows tabs only for notification categories reported by the hub", () => {
 
   assert.deepEqual(
     Array.from(helpers.availableCategories(notifications)),
-    ["equipment", "sensors"],
+    ["equipment", "sensors", "automations"],
   );
 });
 

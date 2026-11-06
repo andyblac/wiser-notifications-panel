@@ -50,6 +50,7 @@
 
   function availableCategories(notifications) {
     return CATEGORY_ORDER.filter(category => {
+      if (category === "automations") return true;
       const items = notifications?.[category] || [];
       return category === "equipment" ? compatibleEquipment(items).length : items.length;
     });
@@ -1074,11 +1075,12 @@
         :host([nested]) .app-header.single-hub { display:none; }
         main { flex:1 1 auto; width:100%; min-height:0; margin:0; padding:24px clamp(12px, 3vw, 32px) 40px; overflow-y:auto; overscroll-behavior:contain; }
         .hero { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:24px; }
-        .hero h2 { margin:0 0 6px; font-size:28px; line-height:1.2; }
-        .hero p { margin:0; color:var(--secondary-text-color); }
-        .category-tabs { display:flex; gap:4px; overflow:auto; margin:-4px 0 22px; border-bottom:1px solid var(--divider-color); }
-        .category-tab { min-height:48px; padding:0 18px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
+        .hero h2 { margin:0 0 6px; font-family:inherit; font-size:28px; font-weight:700; line-height:1.2; letter-spacing:0; }
+        .hero p { margin:0; color:var(--secondary-text-color); font-family:inherit; font-size:14px; font-weight:400; line-height:normal; }
+        .category-tabs { display:flex; flex-shrink:0; min-width:0; overflow-x:auto; margin:12px 0 22px; border-bottom:1px solid var(--divider-color); }
+        .category-tab { flex:0 0 auto; min-height:44px; padding:0 16px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; font-size:17px; cursor:pointer; white-space:nowrap; }
         .category-tab[aria-selected="true"] { color:var(--primary-color); border-bottom-color:var(--primary-color); }
+        .category-tab:focus-visible { outline:2px solid var(--primary-color); outline-offset:-4px; }
         .refresh { display:flex; align-items:center; gap:8px; }
         .message { padding:22px; border-radius:16px; background:var(--ha-card-background, var(--card-background-color)); box-shadow:var(--ha-card-box-shadow); }
         .message.error { color:var(--error-color, #db4437); border-inline-start:4px solid currentColor; }
@@ -1150,8 +1152,9 @@
         .order-settings > h2 { margin:0 0 4px; font-size:18px; }
         .order-settings > p { margin:0 0 16px; color:var(--secondary-text-color); font-size:13px; }
         .settings-category-tabs { display:flex; min-width:0; overflow-x:auto; margin:0 0 16px; border-bottom:1px solid var(--divider-color); }
-        .settings-category-tab { flex:0 0 auto; min-height:42px; padding:0 16px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
+        .settings-category-tab { flex:0 0 auto; min-height:44px; padding:0 16px; border:0; border-bottom:3px solid transparent; color:var(--secondary-text-color); background:transparent; font:inherit; font-size:17px; cursor:pointer; white-space:nowrap; }
         .settings-category-tab[aria-selected="true"] { color:var(--primary-color); border-bottom-color:var(--primary-color); }
+        .settings-category-tab:focus-visible { outline:2px solid var(--primary-color); outline-offset:-4px; }
         .order-section + .order-section { margin-top:18px; }
         .order-section h3 { margin:0 0 8px; font-size:15px; }
         .order-list { display:grid; gap:6px; }
