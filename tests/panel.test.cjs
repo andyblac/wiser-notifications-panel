@@ -722,6 +722,35 @@ test("equipment status toggles preserve unsaved power values", async () => {
   });
 });
 
+test("saving a power notification preserves drafts on other rows", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  const equipment = [1, 2].map(equipment_id => ({
+    equipment_id,
+    notifications:{over:{period_mins:5, limit:100, enabled:true}},
+  }));
+  panel._notifications.equipment = equipment;
+  panel._seedDrafts();
+  panel._drafts.get("1:over").enabled = false;
+  panel._drafts.get("2:over").limit = 275;
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:async () => [{
+      ...equipment[0],
+      notifications:{over:{...equipment[0].notifications.over, enabled:false}},
+    }, equipment[1]],
+  };
+
+  await panel._saveNotificationEnabled({dataset:{equipmentId:"1", notification:"over"}});
+
+  assert.equal(panel._isDirty("1:over"), false);
+  assert.equal(panel._drafts.get("2:over").limit, 275);
+  assert.equal(panel._originalDrafts.get("2:over").limit, 100);
+  assert.equal(panel._isDirty("2:over"), true);
+});
+
 test("failed immediate status updates restore the confirmed state", async () => {
   const {Panel} = setup();
   const panel = new Panel();

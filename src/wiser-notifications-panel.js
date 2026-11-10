@@ -232,7 +232,7 @@
       return `${equipmentId}:${type}`;
     }
 
-    _seedDrafts(preserveDirty = false) {
+    _seedDrafts(preserveDirty = false, saved = null) {
       const previousDrafts = this._drafts;
       const previousOriginals = this._originalDrafts;
       const previousDeviceDrafts = this._deviceDrafts;
@@ -248,7 +248,8 @@
             const previous = previousDrafts.get(key);
             const previousOriginal = previousOriginals.get(key);
             for (const field of ["period_mins", "limit", "enabled"]) {
-              if (previous && previousOriginal && previous[field] !== previousOriginal[field]) {
+              if (previous && previousOriginal && previous[field] !== previousOriginal[field]
+                && (key !== saved?.key || !saved.fields.includes(field))) {
                 draft[field] = previous[field];
               }
             }
@@ -273,7 +274,8 @@
             const previous = previousDeviceDrafts.get(key);
             const previousOriginal = previousOriginalDeviceDrafts.get(key);
             for (const field of Object.keys(draft)) {
-              if (previous && previousOriginal && previous[field] !== previousOriginal[field]) {
+              if (previous && previousOriginal && previous[field] !== previousOriginal[field]
+                && (key !== saved?.key || !saved.fields.includes(field))) {
                 draft[field] = previous[field];
               }
             }
@@ -421,7 +423,7 @@
         enabled:draft.enabled,
       }, result => {
         this._notifications.equipment = result;
-        this._seedDrafts();
+        this._seedDrafts(true, {key, fields:["period_mins", "limit", "enabled"]});
         this._notify(this._t("panel.saved"));
       }, error => {
         this._error = this._t("panel.save_error", {error:error?.message || error});
@@ -436,9 +438,6 @@
       const draft = this._drafts.get(key);
       const original = this._originalDrafts.get(key);
       if (!draft?.configured || !original || draft.enabled === original.enabled) return;
-      const pending = Object.fromEntries(["period_mins", "limit"]
-        .filter(field => draft[field] !== original[field])
-        .map(field => [field, draft[field]]));
       await this._writeForHub(key, {
         type:"wiser/power_notification/set_enabled",
         equipment_id:equipmentId,
@@ -446,9 +445,7 @@
         enabled:draft.enabled,
       }, result => {
         this._notifications.equipment = result;
-        this._seedDrafts();
-        const refreshed = this._drafts.get(key);
-        if (refreshed) Object.assign(refreshed, pending);
+        this._seedDrafts(true, {key, fields:["enabled"]});
         this._notify(this._t("panel.saved"));
       }, error => {
         draft.enabled = original.enabled;
@@ -487,7 +484,7 @@
         notification_type:type,
       }, result => {
         this._notifications.equipment = result;
-        this._seedDrafts();
+        this._seedDrafts(true, {key, fields:["period_mins", "limit", "enabled"]});
         this._notify(this._t("panel.deleted"));
       }, error => {
         this._error = this._t("panel.delete_error", {error:error?.message || error});
@@ -503,9 +500,6 @@
       if (!draft || !(field in draft) || !this._isDeviceFieldDirty(key, field)) return;
       if (category !== "automations" && field !== "enabled") return;
       const originalValue = this._originalDeviceDrafts.get(key)?.[field];
-      const pending = Object.fromEntries(Object.keys(draft)
-        .filter(other => other !== field && this._isDeviceFieldDirty(key, other))
-        .map(other => [other, draft[other]]));
       const message = category === "automations"
         ? {
             type:field === "notification_enabled"
@@ -522,9 +516,7 @@
           };
       await this._writeForHub(key, message, result => {
         this._notifications = result;
-        this._seedDrafts();
-        const refreshed = this._deviceDrafts.get(key);
-        if (refreshed) Object.assign(refreshed, pending);
+        this._seedDrafts(true, {key, fields:[field]});
         this._notify(this._t("panel.saved"));
       }, error => {
         if (typeof originalValue === "boolean") draft[field] = originalValue;
@@ -561,7 +553,7 @@
         automation_id:automationId,
       }, result => {
         this._notifications = result;
-        this._seedDrafts();
+        this._seedDrafts(true, {key, fields:["enabled", "notification_enabled"]});
         this._notify(this._t("automation.deleted"));
       }, error => {
         this._error = this._t("automation.delete_error", {error:error?.message || error});
