@@ -25,6 +25,7 @@ The panel requires a compatible version of the Wiser Home Assistant integration 
 - `wiser/hubs`
 - `wiser/notifications`
 - `wiser/power_notification/set`
+- `wiser/power_notification/set_enabled`
 - `wiser/power_notification/delete`
 - `wiser/device_notification/set`
 - `wiser/automation/set_enabled`

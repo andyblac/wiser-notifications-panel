@@ -708,12 +708,10 @@ test("equipment status toggles preserve unsaved power values", async () => {
   });
 
   assert.deepEqual(plain(request), {
-    type:"wiser/power_notification/set",
+    type:"wiser/power_notification/set_enabled",
     hub:"Home",
     equipment_id:1,
     notification_type:"over",
-    period_mins:5,
-    limit:100,
     enabled:false,
   });
   assert.deepEqual(plain(panel._drafts.get("1:over")), {

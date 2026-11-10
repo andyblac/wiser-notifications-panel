@@ -440,11 +440,9 @@
         .filter(field => draft[field] !== original[field])
         .map(field => [field, draft[field]]));
       await this._writeForHub(key, {
-        type:"wiser/power_notification/set",
+        type:"wiser/power_notification/set_enabled",
         equipment_id:equipmentId,
         notification_type:type,
-        period_mins:original.period_mins,
-        limit:original.limit,
         enabled:draft.enabled,
       }, result => {
         this._notifications.equipment = result;
