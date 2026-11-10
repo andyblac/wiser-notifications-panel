@@ -110,6 +110,7 @@
       this._deviceDrafts = new Map();
       this._originalDeviceDrafts = new Map();
       this._busy = new Set();
+      this._writesByHub = new Map();
       this._loading = true;
       this._error = "";
       this._message = "";
@@ -365,19 +366,38 @@
     }
 
     async _writeForHub(key, message, apply, onError) {
-      // A new hub gets a fresh busy set, so late replies cannot change its view.
+      // Capture the hub before queuing. A hub switch replaces the view's busy set.
+      const hub = this._hub;
+      const hass = this._hass;
       const busy = this._busy;
+      if (busy.has(key)) return;
       busy.add(key);
       this._error = "";
       this._renderSoon();
+
+      const write = async () => {
+        try {
+          const result = await hass.callWS({...message, hub});
+          if (busy === this._busy) {
+            // Older loads may contain a snapshot taken before the write.
+            this._loadRequest = null;
+            this._loading = false;
+            apply(result);
+          }
+        } catch (error) {
+          if (busy === this._busy) onError(error);
+        } finally {
+          busy.delete(key);
+          if (busy === this._busy) this._renderSoon();
+        }
+      };
+      const previous = this._writesByHub.get(hub);
+      const pending = previous ? previous.then(write, write) : write();
+      this._writesByHub.set(hub, pending);
       try {
-        const result = await this._hass.callWS({...message, hub:this._hub});
-        if (busy === this._busy) apply(result);
-      } catch (error) {
-        if (busy === this._busy) onError(error);
+        await pending;
       } finally {
-        busy.delete(key);
-        if (busy === this._busy) this._renderSoon();
+        if (this._writesByHub.get(hub) === pending) this._writesByHub.delete(hub);
       }
     }
 
@@ -448,7 +468,9 @@
         this._seedDrafts(true, {key, fields:["enabled"]});
         this._notify(this._t("panel.saved"));
       }, error => {
-        draft.enabled = original.enabled;
+        const current = this._drafts.get(key);
+        const confirmed = this._originalDrafts.get(key);
+        if (current && confirmed) current.enabled = confirmed.enabled;
         this._error = this._t("panel.save_error", {error:error?.message || error});
       });
     }
@@ -499,7 +521,6 @@
       const draft = this._deviceDrafts.get(key);
       if (!draft || !(field in draft) || !this._isDeviceFieldDirty(key, field)) return;
       if (category !== "automations" && field !== "enabled") return;
-      const originalValue = this._originalDeviceDrafts.get(key)?.[field];
       const message = category === "automations"
         ? {
             type:field === "notification_enabled"
@@ -519,7 +540,9 @@
         this._seedDrafts(true, {key, fields:[field]});
         this._notify(this._t("panel.saved"));
       }, error => {
-        if (typeof originalValue === "boolean") draft[field] = originalValue;
+        const current = this._deviceDrafts.get(key);
+        const confirmed = this._originalDeviceDrafts.get(key)?.[field];
+        if (current && typeof confirmed === "boolean") current[field] = confirmed;
         this._error = this._t("panel.save_error", {error:error?.message || error});
       });
     }
@@ -767,7 +790,7 @@
       if (deviceSection?.dataset?.category) {
         const key = `${deviceSection.dataset.category}:${deviceSection.dataset.deviceId}`;
         const draft = this._deviceDrafts.get(key);
-        if (!draft || !(field in draft)) return;
+        if (this._busy.has(key) || !draft || !(field in draft)) return;
         draft[field] = !draft[field];
         return this._saveDevice(deviceSection, field);
       }
@@ -775,7 +798,7 @@
       if (!section) return;
       const key = this._key(Number(section.dataset.equipmentId), section.dataset.notification);
       const draft = this._drafts.get(key);
-      if (!draft) return;
+      if (this._busy.has(key) || !draft) return;
       draft.enabled = !draft.enabled;
       return this._saveNotificationEnabled(section);
     }

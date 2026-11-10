@@ -751,6 +751,55 @@ test("saving a power notification preserves drafts on other rows", async () => {
   assert.equal(panel._isDirty("2:over"), true);
 });
 
+test("same-hub writes finish in order and discard older refresh results", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hub = "Home";
+  panel._hubs = ["Home"];
+  const equipment = (first, second) => [first, second].map((enabled, index) => ({
+    equipment_id:index + 1,
+    notifications:{over:{period_mins:5, limit:100, enabled}},
+  }));
+  panel._notifications.equipment = equipment(true, true);
+  panel._seedDrafts();
+  const pending = new Map();
+  const calls = [];
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:message => new Promise(resolve => {
+      const key = message.type === "wiser/notifications" ? "read" : message.equipment_id;
+      calls.push(key);
+      pending.set(key, resolve);
+    }),
+  };
+  const refresh = panel._load(true);
+  const toggle = id => {
+    panel._drafts.get(`${id}:over`).enabled = false;
+    return panel._saveNotificationEnabled({dataset:{equipmentId:String(id), notification:"over"}});
+  };
+  const first = toggle(1);
+  const second = toggle(2);
+  assert.deepEqual(calls, ["read", 1]);
+  assert.equal(panel._busy.has("2:over"), true);
+
+  pending.get(1)(equipment(false, true));
+  await first;
+  assert.deepEqual(calls, ["read", 1, 2]);
+  pending.get(2)(equipment(false, false));
+  await second;
+  pending.get("read")({
+    equipment:equipment(true, true), smoke_alarms:[], sensors:[], automations:[],
+  });
+  await refresh;
+
+  assert.deepEqual(plain(panel._notifications.equipment.map(
+    item => item.notifications.over.enabled
+  )), [false, false]);
+  assert.equal(panel._isDirty("1:over"), false);
+  assert.equal(panel._isDirty("2:over"), false);
+});
+
 test("failed immediate status updates restore the confirmed state", async () => {
   const {Panel} = setup();
   const panel = new Panel();
