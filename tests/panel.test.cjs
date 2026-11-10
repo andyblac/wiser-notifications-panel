@@ -232,6 +232,40 @@ test("loads native notifications from the selected hub", async () => {
   assert.equal(panel._drafts.get("1:over").limit, 100);
 });
 
+test("late loads and writes cannot replace the selected hub's notifications", async () => {
+  const {Panel} = setup();
+  const panel = new Panel();
+  panel._renderSoon = () => {};
+  panel._hubs = ["A", "B"];
+  panel._hub = "A";
+  const data = name => ({
+    equipment:[], smoke_alarms:[], sensors:[],
+    automations:[{automation_id:7, name}],
+  });
+  const pending = new Map();
+  panel._hass = {
+    user:{is_admin:true},
+    callWS:message => new Promise(resolve => pending.set(message.type + message.hub, resolve)),
+  };
+  const loadA = panel._load();
+  const deleteA = panel._deleteAutomation(7);
+  panel._automationDeleteId = 7;
+  panel._notificationDelete = {equipmentId:7, type:"under"};
+  panel._selectHub("B");
+
+  assert.equal(panel._automationDeleteId, null);
+  assert.equal(panel._notificationDelete, null);
+  pending.get("wiser/notificationsB")(data("Hub B"));
+  await Promise.resolve();
+  pending.get("wiser/notificationsA")(data("Hub A"));
+  pending.get("wiser/automation/deleteA")(data("Hub A after delete"));
+  await Promise.all([loadA, deleteA]);
+
+  assert.equal(panel._hub, "B");
+  assert.equal(panel._notifications.automations[0].name, "Hub B");
+  assert.equal(panel._loading, false);
+});
+
 test("silent updates preserve unsaved automation status changes", async () => {
   const {Panel} = setup();
   const panel = new Panel();

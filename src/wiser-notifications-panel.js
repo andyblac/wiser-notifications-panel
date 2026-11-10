@@ -125,6 +125,7 @@
       this._subscriptionConnection = null;
       this._unsubscribeUpdates = null;
       this._subscriptionGeneration = 0;
+      this._loadRequest = null;
       this._mobileMedia = window.matchMedia?.("(max-width:800px)") || null;
       this._mobileMediaChanged = () => {
         if (this._settingsOpen) this._renderSoon();
@@ -160,7 +161,7 @@
       this._hubs = [...hubs];
       const remembered = config.panel_id ? selectedHubs.get(config.panel_id) : undefined;
       if (!this._hubs.includes(this._hub)) {
-        this._hub = this._hubs.includes(remembered) ? remembered : this._hubs[0] || "";
+        this._setHub(this._hubs.includes(remembered) ? remembered : this._hubs[0] || "");
       }
       if (this._hass && this.isConnected) this._load();
     }
@@ -183,6 +184,7 @@
     }
 
     disconnectedCallback() {
+      this._loadRequest = null;
       this._mobileMedia?.removeEventListener?.("change", this._mobileMediaChanged);
       this._unsubscribeFromUpdates();
       if (this._renderFrame) cancelAnimationFrame(this._renderFrame);
@@ -299,6 +301,8 @@
 
     async _load(silent = false) {
       if (!this._hass?.callWS) return;
+      const request = {};
+      this._loadRequest = request;
       if (!silent) {
         this._loading = true;
         this._error = "";
@@ -306,14 +310,18 @@
       }
       try {
         if (!this._hubs.length) {
-          this._hubs = await this._hass.callWS({type:"wiser/hubs"});
+          const hubs = await this._hass.callWS({type:"wiser/hubs"});
+          if (this._loadRequest !== request) return;
+          this._hubs = hubs;
         }
-        if (!this._hubs.includes(this._hub)) this._hub = this._hubs[0] || "";
+        if (!this._hubs.includes(this._hub)) this._setHub(this._hubs[0] || "");
         if (!this._hub) throw new Error("No Wiser hub is available");
-        this._notifications = await this._hass.callWS({
+        const notifications = await this._hass.callWS({
           type:"wiser/notifications",
           hub:this._hub,
         });
+        if (this._loadRequest !== request) return;
+        this._notifications = notifications;
         for (const category of CATEGORY_ORDER) {
           if (!Array.isArray(this._notifications?.[category])) this._notifications[category] = [];
         }
@@ -322,20 +330,53 @@
         this._seedDrafts(silent);
         this._error = "";
       } catch (error) {
-        this._error = this._t("panel.load_error", {error:error?.message || error});
+        if (this._loadRequest === request) {
+          this._error = this._t("panel.load_error", {error:error?.message || error});
+        }
       } finally {
-        this._loading = false;
-        this._renderSoon();
+        if (this._loadRequest === request) {
+          this._loading = false;
+          this._renderSoon();
+        }
       }
+    }
+
+    _setHub(hub) {
+      if (hub === this._hub) return;
+      this._hub = hub;
+      this._notifications = {equipment:[], smoke_alarms:[], sensors:[], automations:[]};
+      this._drafts.clear();
+      this._originalDrafts.clear();
+      this._deviceDrafts.clear();
+      this._originalDeviceDrafts.clear();
+      this._busy = new Set();
+      this._automationDeleteId = null;
+      this._notificationDelete = null;
+      if (this._settingsOpen) this._closeSettings();
     }
 
     _selectHub(hub) {
       if (!this._hubs.includes(hub) || hub === this._hub) return;
-      this._hub = hub;
+      this._setHub(hub);
       if (this._config.panel_id) selectedHubs.set(this._config.panel_id, hub);
-      this._notifications = {equipment:[], smoke_alarms:[], sensors:[], automations:[]};
-      this._drafts.clear();
       this._load();
+    }
+
+    async _writeForHub(key, message, apply, onError) {
+      // A new hub gets a fresh busy set, so late replies cannot change its view.
+      const busy = this._busy;
+      busy.add(key);
+      this._error = "";
+      this._renderSoon();
+      try {
+        const result = await this._hass.callWS({...message, hub:this._hub});
+        if (busy === this._busy) apply(result);
+      } catch (error) {
+        if (busy === this._busy) onError(error);
+      } finally {
+        busy.delete(key);
+        if (busy === this._busy) this._renderSoon();
+      }
     }
 
     _input(event) {
@@ -371,27 +412,20 @@
       const inputs = [...section.querySelectorAll("input[data-field]")];
       if (!inputs.every(input => input.reportValidity())) return;
       if (!Number.isInteger(draft.period_mins) || !Number.isInteger(draft.limit)) return;
-      this._busy.add(key);
-      this._error = "";
-      this._renderSoon();
-      try {
-        this._notifications.equipment = await this._hass.callWS({
-          type:"wiser/power_notification/set",
-          hub:this._hub,
-          equipment_id:equipmentId,
-          notification_type:type,
-          period_mins:draft.period_mins,
-          limit:draft.limit,
-          enabled:draft.enabled,
-        });
+      await this._writeForHub(key, {
+        type:"wiser/power_notification/set",
+        equipment_id:equipmentId,
+        notification_type:type,
+        period_mins:draft.period_mins,
+        limit:draft.limit,
+        enabled:draft.enabled,
+      }, result => {
+        this._notifications.equipment = result;
         this._seedDrafts();
         this._notify(this._t("panel.saved"));
-      } catch (error) {
+      }, error => {
         this._error = this._t("panel.save_error", {error:error?.message || error});
-      } finally {
-        this._busy.delete(key);
-        this._renderSoon();
-      }
+      });
     }
 
     async _saveNotificationEnabled(section) {
@@ -405,30 +439,23 @@
       const pending = Object.fromEntries(["period_mins", "limit"]
         .filter(field => draft[field] !== original[field])
         .map(field => [field, draft[field]]));
-      this._busy.add(key);
-      this._error = "";
-      this._renderSoon();
-      try {
-        this._notifications.equipment = await this._hass.callWS({
-          type:"wiser/power_notification/set",
-          hub:this._hub,
-          equipment_id:equipmentId,
-          notification_type:type,
-          period_mins:original.period_mins,
-          limit:original.limit,
-          enabled:draft.enabled,
-        });
+      await this._writeForHub(key, {
+        type:"wiser/power_notification/set",
+        equipment_id:equipmentId,
+        notification_type:type,
+        period_mins:original.period_mins,
+        limit:original.limit,
+        enabled:draft.enabled,
+      }, result => {
+        this._notifications.equipment = result;
         this._seedDrafts();
         const refreshed = this._drafts.get(key);
         if (refreshed) Object.assign(refreshed, pending);
         this._notify(this._t("panel.saved"));
-      } catch (error) {
+      }, error => {
         draft.enabled = original.enabled;
         this._error = this._t("panel.save_error", {error:error?.message || error});
-      } finally {
-        this._busy.delete(key);
-        this._renderSoon();
-      }
+      });
     }
 
     _openNotificationDelete(section) {
@@ -456,24 +483,17 @@
     async _deleteNotification(equipmentId, type) {
       if (!this._hass?.user?.is_admin) return;
       const key = this._key(equipmentId, type);
-      this._busy.add(key);
-      this._error = "";
-      this._renderSoon();
-      try {
-        this._notifications.equipment = await this._hass.callWS({
-          type:"wiser/power_notification/delete",
-          hub:this._hub,
-          equipment_id:equipmentId,
-          notification_type:type,
-        });
+      await this._writeForHub(key, {
+        type:"wiser/power_notification/delete",
+        equipment_id:equipmentId,
+        notification_type:type,
+      }, result => {
+        this._notifications.equipment = result;
         this._seedDrafts();
         this._notify(this._t("panel.deleted"));
-      } catch (error) {
+      }, error => {
         this._error = this._t("panel.delete_error", {error:error?.message || error});
-      } finally {
-        this._busy.delete(key);
-        this._renderSoon();
-      }
+      });
     }
 
     async _saveDevice(section, field = "enabled") {
@@ -488,38 +508,30 @@
       const pending = Object.fromEntries(Object.keys(draft)
         .filter(other => other !== field && this._isDeviceFieldDirty(key, other))
         .map(other => [other, draft[other]]));
-      this._busy.add(key);
-      this._error = "";
-      this._renderSoon();
-      try {
-        const message = category === "automations"
-          ? {
-              type:field === "notification_enabled"
-                ? "wiser/automation/set_notification_enabled"
-                : "wiser/automation/set_enabled",
-              hub:this._hub,
-              automation_id:deviceId,
-              enabled:draft[field],
-            }
-          : {
-              type:"wiser/device_notification/set",
-              hub:this._hub,
-              category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
-              device_id:deviceId,
-              enabled:draft.enabled,
-            };
-        this._notifications = await this._hass.callWS(message);
+      const message = category === "automations"
+        ? {
+            type:field === "notification_enabled"
+              ? "wiser/automation/set_notification_enabled"
+              : "wiser/automation/set_enabled",
+            automation_id:deviceId,
+            enabled:draft[field],
+          }
+        : {
+            type:"wiser/device_notification/set",
+            category:category === "smoke_alarms" ? "smoke_alarm" : "sensor",
+            device_id:deviceId,
+            enabled:draft.enabled,
+          };
+      await this._writeForHub(key, message, result => {
+        this._notifications = result;
         this._seedDrafts();
         const refreshed = this._deviceDrafts.get(key);
         if (refreshed) Object.assign(refreshed, pending);
         this._notify(this._t("panel.saved"));
-      } catch (error) {
+      }, error => {
         if (typeof originalValue === "boolean") draft[field] = originalValue;
         this._error = this._t("panel.save_error", {error:error?.message || error});
-      } finally {
-        this._busy.delete(key);
-        this._renderSoon();
-      }
+      });
     }
 
     _openAutomationDelete(section) {
@@ -546,23 +558,16 @@
     async _deleteAutomation(automationId) {
       if (!this._hass?.user?.is_admin) return;
       const key = `automations:${automationId}`;
-      this._busy.add(key);
-      this._error = "";
-      this._renderSoon();
-      try {
-        this._notifications = await this._hass.callWS({
-          type:"wiser/automation/delete",
-          hub:this._hub,
-          automation_id:automationId,
-        });
+      await this._writeForHub(key, {
+        type:"wiser/automation/delete",
+        automation_id:automationId,
+      }, result => {
+        this._notifications = result;
         this._seedDrafts();
         this._notify(this._t("automation.deleted"));
-      } catch (error) {
+      }, error => {
         this._error = this._t("automation.delete_error", {error:error?.message || error});
-      } finally {
-        this._busy.delete(key);
-        this._renderSoon();
-      }
+      });
     }
 
     _hubSettings(hub = this._hub) {
