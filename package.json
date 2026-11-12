@@ -1,6 +1,6 @@
 {
   "name": "wiser-notifications-panel",
-  "version": "0.9.0",
+  "version": "0.9.1-beta.1-dev.1",
   "private": true,
   "description": "Native Wiser power notification management panel for Home Assistant",
   "license": "MIT",

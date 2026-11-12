@@ -1136,7 +1136,7 @@ test("shows panel version information in settings", () => {
 
   assert.match(
     panel._settingsMarkup(),
-    /class="settings-version">Wiser Notifications Panel · __WISER_NOTIFICATIONS_PANEL_VERSION__<\/div>/,
+    /id="settings-actions" slot="footer">\s*<span class="editor-version">Wiser Notifications Panel · __WISER_NOTIFICATIONS_PANEL_VERSION__<\/span>/,
   );
 });
 

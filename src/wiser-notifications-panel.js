@@ -1065,10 +1065,10 @@
             ${categoryTabs}
             <div class="settings-order-section">${orderSection}</div>
           </section>
-          <div class="settings-version">Wiser Notifications Panel · ${esc(VERSION)}</div>
           <p class="settings-error" role="alert">${esc(this._settingsError)}</p>
         </div>
         <div class="settings-actions" id="settings-actions" slot="footer">
+          <span class="editor-version">Wiser Notifications Panel · ${esc(VERSION)}</span>
           <ha-button appearance="plain" data-action="settings-cancel"${this._savingSettings ? " disabled" : ""}>${esc(this._t("action.cancel"))}</ha-button>
           <ha-button data-action="settings-save"${this._savingSettings ? " disabled" : ""}>${esc(this._t("action.save"))}</ha-button>
         </div>`;
@@ -1183,9 +1183,10 @@
         .order-item.drop-before::before, .order-item.drop-after::after { content:""; position:absolute; right:0; left:0; height:3px; border-radius:2px; background:var(--primary-color); }
         .order-item.drop-before::before { top:-5px; }
         .order-item.drop-after::after { bottom:-5px; }
-        .settings-version { margin-top:24px; color:var(--secondary-text-color); font-size:12px; text-align:right; }
+        .editor-version { margin-right:auto; color:var(--secondary-text-color); font-size:12px; }
+        @media (max-width:720px) { .editor-version { max-width:42%; } }
         .settings-error { min-height:20px; margin:14px 0 0 !important; color:var(--error-color, #db4437) !important; }
-        .settings-actions { display:flex; justify-content:flex-end; gap:8px; }
+        .settings-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; }
         .delete-confirmation { min-width:min(520px, 70vw); margin:0; padding:4px 2px 24px; color:var(--primary-text-color); }
         @container (max-width:680px) {
           .fields { grid-template-columns:1fr; }
